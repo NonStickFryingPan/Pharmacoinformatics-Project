@@ -31,6 +31,8 @@ Sys.setenv(JAVA_HOME = "C:/Program Files/Java/jdk-21.0.11")
 
 ## Steps
 
+> Feel free to download the provided Rmd file & use that to run code blocks. 
+
 Query Open Targets and ChEMBL APIs for raw target validation and bioactivity data.
 ```R
 # Fetch LRRK2 (CHEMBL1075104) IC50 data
