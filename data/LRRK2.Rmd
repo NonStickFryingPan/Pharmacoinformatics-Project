@@ -1,0 +1,1232 @@
+﻿---
+title: Integrated In Silico Drug Discovery Pipeline â€” LRRK2 Inhibitors for Parkinson's
+  Disease
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    theme: cosmo
+    df_print: paged
+    fig.width: 10
+    fig.height: 6
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  out.width = "100%"
+)
+```
+
+# Target Selection & Justification
+
+## Disease: Parkinson's Disease
+
+Parkinson's disease (PD) is a progressive neurodegenerative disorder affecting over 10 million people worldwide. It is characterised by the loss of dopaminergic neurons in the substantia nigra pars compacta, leading to motor symptoms including tremor, rigidity, bradykinesia, and postural instability. While current treatments (levodopa, dopamine agonists) manage symptoms, no disease-modifying therapy exists.
+
+## Target: Leucine-Rich Repeat Kinase 2 (LRRK2)
+
+LRRK2 is a large (2527 amino acid) multidomain protein with both GTPase and kinase activities. The G2019S mutation in the kinase domain is the most common genetic cause of Parkinson's disease, found in ~4% of familial and ~1% of sporadic PD cases. This mutation increases kinase activity, and LRRK2 kinase inhibitors are currently among the hottest areas in neuro-pharmacology with multiple candidates in clinical trials (DNL201, DNL151/BIIB122).
+
+**Why LRRK2 is a SOTA target:**
+- Strong genetic validation (G2019S is causal)
+- Druggable kinase domain with solved crystal structures
+- Multiple inhibitors in Phases I/II clinical trials
+- Active research area with recent ChEMBL data
+
+## Required Packages
+
+```{r packages-step1}
+required_packages <- c(
+  "httr2", "jsonlite", "dplyr", "tibble", "purrr", "tidyr",
+  "ggplot2", "DT", "stringr", "scales", "rentrez", "knitr"
+)
+
+to_install <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(to_install) > 0) {
+  install.packages(to_install, repos = "https://cloud.r-project.org")
+}
+
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+```
+
+## Fixed Inputs
+
+```{r fixed-inputs}
+disease_name <- "Parkinson's disease"
+disease_id   <- "MONDO_0005180"
+
+target_symbol <- "LRRK2"
+target_id     <- "ENSG00000188906"
+
+disease_link <- paste0("https://platform.opentargets.org/disease/", disease_id)
+target_link  <- paste0("https://platform.opentargets.org/target/", target_id)
+ensembl_link <- paste0("https://www.ensembl.org/Homo_sapiens/Gene/Summary?g=", target_id)
+
+links_tbl <- tibble(
+  Resource = c("Disease page (Open Targets)", "Target page (Open Targets)", "Gene page (Ensembl)"),
+  Link = c(disease_link, target_link, ensembl_link)
+) %>%
+  mutate(Link = sprintf('<a href="%s" target="_blank">%s</a>', Link, Link))
+
+DT::datatable(links_tbl, escape = FALSE, rownames = FALSE, options = list(dom = "t"),
+              caption = "Direct links for the assigned disease and target")
+```
+
+## API Helper
+
+```{r api-helper}
+ot_post <- function(query, variables = list()) {
+  req <- httr2::request("https://api.platform.opentargets.org/api/v4/graphql") %>%
+    httr2::req_method("POST") %>%
+    httr2::req_body_json(list(query = query, variables = variables))
+
+  resp <- httr2::req_perform(req)
+  payload <- httr2::resp_body_json(resp, simplifyVector = FALSE)
+
+  if (!is.null(payload$errors)) {
+    print(payload$errors)
+    stop("Open Targets API returned an error.")
+  }
+  payload$data
+}
+```
+
+## Retrieve Top Disease-Associated Targets
+
+```{r disease-target-query}
+top_n_targets <- 50
+
+query_disease_targets <- "
+query DiseaseTargets($diseaseId: String!, $size: Int!) {
+  disease(efoId: $diseaseId) {
+    id
+    name
+    associatedTargets(page: {index: 0, size: $size}) {
+      count
+      rows {
+        score
+        target {
+          id
+          approvedSymbol
+          approvedName
+          biotype
+        }
+      }
+    }
+  }
+}
+"
+
+disease_targets_raw <- ot_post(
+  query = query_disease_targets,
+  variables = list(diseaseId = disease_id, size = top_n_targets)
+)
+
+if (is.null(disease_targets_raw$disease)) {
+  stop("The disease ID did not resolve in Open Targets.")
+}
+
+rows <- disease_targets_raw$disease$associatedTargets$rows
+
+if (is.null(rows) || length(rows) == 0) {
+  stop("The disease resolved, but Open Targets returned zero associated targets for this ID.")
+}
+
+disease_targets <- purrr::map_dfr(rows, function(x) {
+  tibble(
+    ensembl_id        = x$target$id %||% NA_character_,
+    symbol            = x$target$approvedSymbol %||% NA_character_,
+    gene_name         = x$target$approvedName %||% NA_character_,
+    biotype           = x$target$biotype %||% NA_character_,
+    association_score = as.numeric(x$score %||% NA_real_)
+  )
+}) %>%
+  filter(!is.na(symbol)) %>%
+  arrange(desc(association_score)) %>%
+  mutate(rank = row_number())
+
+head(disease_targets, 10)
+```
+
+## Top Targets Table
+
+```{r disease-target-table}
+DT::datatable(
+  disease_targets,
+  extensions = "Buttons",
+  options = list(dom = "Bfrtip", buttons = c("copy", "csv", "excel"),
+                 pageLength = 10, scrollX = TRUE),
+  caption = paste("Top Open Targets disease-associated genes for", disease_name)
+)
+```
+
+## Assigned Target Evaluation
+
+```{r assigned-target-evaluation}
+assigned_match <- disease_targets %>%
+  filter(symbol == target_symbol | ensembl_id == target_id)
+
+assigned_summary <- if (nrow(assigned_match) == 0) {
+  tibble(target_symbol = target_symbol, target_id = target_id,
+         found_in_top_n = "No", rank = NA_integer_, association_score = NA_real_)
+} else {
+  tibble(target_symbol = target_symbol, target_id = target_id,
+         found_in_top_n = "Yes",
+         rank = assigned_match$rank[[1]],
+         association_score = assigned_match$association_score[[1]])
+}
+assigned_summary
+```
+
+## Visualisation: Top 15 Target Association Scores
+
+```{r plot-top15}
+plot_df <- disease_targets %>%
+  slice_head(n = 15) %>%
+  mutate(
+    label = paste0(symbol, " (", rank, ")"),
+    highlight = if_else(symbol == target_symbol, "LRRK2 (Assigned)", "Other target")
+  )
+
+ggplot(plot_df, aes(x = reorder(label, association_score), y = association_score, fill = highlight)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01)) +
+  labs(
+    title = paste("Top 15 associated targets in", disease_name),
+    subtitle = paste("Highlighted target:", target_symbol),
+    x = "Gene (rank)", y = "Association score", fill = NULL
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+## Visualisation: Rank Profile
+
+```{r plot-rank-profile}
+ggplot(disease_targets, aes(x = rank, y = association_score)) +
+  geom_line(alpha = 0.5) +
+  geom_point(
+    data = filter(disease_targets, symbol == target_symbol | ensembl_id == target_id),
+    size = 4, colour = "red"
+  ) +
+  labs(
+    title = paste("Association score profile across ranked targets:", disease_name),
+    subtitle = paste("Highlighted target:", target_symbol),
+    x = "Rank", y = "Association score"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+## PubMed Literature Support
+
+```{r pubmed-search}
+search_term <- paste0('("Parkinson disease" OR "Parkinson\'s disease") AND "LRRK2"[Title/Abstract]')
+
+pubmed_count <- tryCatch({
+  rentrez::entrez_search(db = "pubmed", term = search_term, retmax = 20)$count
+}, error = function(e) NA_integer_)
+
+pubmed_examples <- tryCatch({
+  pm <- rentrez::entrez_search(db = "pubmed", term = search_term, retmax = 5)
+  if (length(pm$ids) == 0) {
+    tibble(PMID = character(), Title = character())
+  } else {
+    summaries <- rentrez::entrez_summary(db = "pubmed", id = pm$ids)
+    tibble(
+      PMID = pm$ids,
+      Title = vapply(summaries, function(x) x$title %||% NA_character_, character(1))
+    )
+  }
+}, error = function(e) tibble(PMID = character(), Title = character()))
+```
+
+```{r pubmed-summary}
+tibble(
+  Disease = disease_name, Target = target_symbol,
+  PubMed_query = search_term, Matching_articles = pubmed_count
+)
+```
+
+```{r pubmed-table}
+DT::datatable(pubmed_examples, options = list(pageLength = 5, scrollX = TRUE),
+              caption = paste("Example PubMed records for Parkinson's disease and LRRK2"))
+```
+
+**Target Validation Conclusion:** LRRK2 is strongly supported by both Open Targets and PubMed evidence. The G2019S mutation is the single most common genetic cause of Parkinson's disease, and multiple LRRK2 kinase inhibitors have advanced to clinical trials. This target is well past the identification phase and firmly in clinical validation â€” making it an ideal choice for an in silico discovery pipeline.
+
+---
+
+# Bioactivity Data Collection & Curation
+
+## Fetching Data from ChEMBL
+
+We query ChEMBL for LRRK2 bioactivity data using the REST API. Human LRRK2 corresponds to ChEMBL target ID **CHEMBL1075104**.
+
+```{r chembl-fetch, results='hide'}
+chembl_target <- "CHEMBL1075104"
+
+fetch_chembl_bioactivities <- function(target_chembl_id, limit = 500) {
+  base_url <- "https://www.ebi.ac.uk/chembl/api/data"
+  url <- paste0(base_url, "/activity.json?target_chembl_id=", target_chembl_id,
+                "&standard_type__in=IC50,Ki&limit=", limit)
+  
+  req <- httr2::request(url) %>%
+    httr2::req_headers(Accept = "application/json")
+  
+  resp <- httr2::req_perform(req)
+  data <- httr2::resp_body_json(resp, simplifyVector = TRUE)
+  
+  activities <- data$activities
+  
+  if (is.null(activities) || length(activities) == 0) {
+    stop("No bioactivity data returned from ChEMBL.")
+  }
+  
+  tibble(
+    molecule_chembl_id = activities$molecule_chembl_id %||% NA_character_,
+    canonical_smiles    = activities$canonical_smiles %||% NA_character_,
+    standard_type       = activities$standard_type %||% NA_character_,
+    standard_value      = as.numeric(activities$standard_value %||% NA_real_),
+    standard_units      = activities$standard_units %||% NA_character_,
+    standard_relation   = activities$standard_relation %||% NA_character_,
+    pchembl_value       = as.numeric(activities$pchembl_value %||% NA_real_),
+    assay_description   = activities$assay_description %||% NA_character_,
+    document_chembl_id  = activities$document_chembl_id %||% NA_character_
+  )
+}
+
+raw_data <- fetch_chembl_bioactivities(chembl_target, limit = 500)
+```
+
+## Data Curation
+
+```{r chembl-curation}
+# Filter: exact measurements only, remove NA values
+curated <- raw_data %>%
+  filter(
+    standard_relation == "=",
+    !is.na(standard_value),
+    !is.na(canonical_smiles),
+    standard_units %in% c("nM", "uM", "M")
+  ) %>%
+  # Convert all units to Molar, then to pIC50
+  mutate(
+    value_M = case_when(
+      standard_units == "nM" ~ standard_value * 1e-9,
+      standard_units == "uM" ~ standard_value * 1e-6,
+      standard_units == "M"  ~ standard_value,
+      TRUE ~ NA_real_
+    ),
+    pIC50 = -log10(value_M)
+  ) %>%
+  filter(!is.na(pIC50), is.finite(pIC50)) %>%
+  # Remove duplicates: keep the median pIC50 per molecule
+  group_by(molecule_chembl_id, canonical_smiles) %>%
+  summarise(
+    pIC50 = round(median(pIC50), 2),
+    n_measurements = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(pIC50)) %>%
+  mutate(Compound = paste0("Cmpd_", sprintf("%03d", row_number()))) %>%
+  select(Compound, molecule_chembl_id, canonical_smiles, pIC50, n_measurements)
+
+# Filter for drug-like MW range (remove very large molecules)
+# We'll do this after descriptor calculation
+```
+
+## Dataset Summary
+
+```{r chembl-summary}
+cat("Total curated compounds with LRRK2 bioactivity:", nrow(curated), "\n")
+cat("pIC50 range:", round(min(curated$pIC50), 2), "to", round(max(curated$pIC50), 2), "\n")
+cat("Median pIC50:", round(median(curated$pIC50), 2), "\n")
+
+kable(head(curated, 15), caption = "Curated LRRK2 Bioactivity Data (Top 15 by pIC50)")
+```
+
+```{r activity-histogram}
+ggplot(curated, aes(x = pIC50)) +
+  geom_histogram(bins = 25, fill = "steelblue", colour = "black", alpha = 0.8) +
+  theme_classic() +
+  labs(title = "Distribution of LRRK2 Inhibitory Activity (pIC50)",
+       x = "pIC50", y = "Number of Compounds")
+```
+
+**Curation Justification:**
+- Only exact measurements (`standard_relation = "=`) were retained to avoid inequality data (e.g., "> 100 ÂµM")
+- All units converted to Molar before computing pIC50 for consistency
+- Duplicate entries per molecule were resolved by taking the median pIC50
+- The pIC50 scale (-log10) linearises the dose-response and is standard in QSAR modelling
+
+---
+
+# Descriptor & Fingerprint Generation
+
+## Required Packages
+
+```{r packages-step3}
+packages_desc <- c("rcdk", "fingerprint", "ggplot2", "dplyr", "knitr", "tidyr")
+Sys.setenv(JAVA_HOME = "C:/Program Files/Java/jdk-21.0.11")
+
+installed <- rownames(installed.packages())
+for (p in packages_desc) {
+  if (!(p %in% installed)) {
+    install.packages(p, dependencies = TRUE, repos = "https://cloud.r-project.org")
+  }
+}
+invisible(lapply(packages_desc, library, character.only = TRUE))
+```
+
+## Parse SMILES to Molecule Objects
+
+```{r parse-smiles}
+# Use the curated compounds from Step 2
+mols <- parse.smiles(curated$canonical_smiles)
+
+# Remove any molecules that failed to parse
+valid_idx <- which(!sapply(mols, is.null))
+mols <- mols[valid_idx]
+curated <- curated[valid_idx, ]
+rm(valid_idx)
+
+cat("Successfully parsed", length(mols), "molecules\n")
+```
+
+## Compute Molecular Descriptors
+
+```{r compute-descriptors}
+desc_vals <- eval.desc(mols, c(
+  "org.openscience.cdk.qsar.descriptors.molecular.WeightDescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.XLogPDescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.HBondDonorCountDescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.HBondAcceptorCountDescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.TPSADescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.RotatableBondsCountDescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.AromaticAtomsCountDescriptor",
+  "org.openscience.cdk.qsar.descriptors.molecular.FractionalCSP3Descriptor"
+))
+
+colnames(desc_vals) <- c("MW", "LogP", "HBD", "HBA", "TPSA", "RotB", "AromaticAtoms", "FracCsp3")
+
+desc_df <- as.data.frame(desc_vals)
+rownames(desc_df) <- NULL
+
+# Filter drug-like compounds (MW < 800 to keep some kinase inhibitors)
+desc_df <- desc_df %>%
+  mutate(
+    idx = row_number(),
+    MW = as.numeric(MW),
+    LogP = as.numeric(LogP),
+    HBD = as.numeric(HBD),
+    HBA = as.numeric(HBA),
+    TPSA = as.numeric(TPSA),
+    RotB = as.numeric(RotB),
+    AromaticAtoms = as.numeric(AromaticAtoms),
+    FracCsp3 = as.numeric(FracCsp3)
+  ) %>%
+  filter(MW >= 150, MW <= 800, !is.na(LogP))
+
+# Align curated data with descriptor data
+curated <- curated[desc_df$idx, ]
+curated <- cbind(curated, desc_df %>% select(-idx))
+rm(desc_df)
+```
+
+## Descriptor Summary
+
+```{r desc-summary}
+kable(head(curated %>% select(Compound, MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3, pIC50), 12),
+      caption = "Compounds with Computed Molecular Descriptors")
+```
+
+```{r desc-distributions}
+curated_long <- curated %>%
+  select(MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3) %>%
+  pivot_longer(everything(), names_to = "Descriptor", values_to = "Value")
+
+ggplot(curated_long, aes(x = Value)) +
+  geom_histogram(bins = 30, fill = "steelblue", colour = "black") +
+  facet_wrap(~ Descriptor, scales = "free") +
+  theme_classic() +
+  labs(title = "Distribution of Molecular Descriptors", x = "Value", y = "Count")
+```
+
+## Compute Circular Fingerprints (ECFP4-like)
+
+```{r compute-fingerprints}
+fps <- lapply(mols[1:nrow(curated)], get.fingerprint, type = "circular")
+
+fp_matrix <- do.call(rbind, lapply(fps, function(x) as.numeric(x@bits)))
+cat("Fingerprint matrix dimensions:", nrow(fp_matrix), "compounds x", ncol(fp_matrix), "bits\n")
+```
+
+**Descriptor Justification:** We selected 8 descriptors covering size (MW), lipophilicity (LogP), hydrogen bonding (HBD/HBA), polarity (TPSA), flexibility (RotB), aromaticity, and sp3 character (FracCsp3). These capture key pharmacokinetic and binding-relevant molecular properties. Circular fingerprints (ECFP4) encode local atom environments up to radius 2, capturing pharmacophoric features relevant for kinase binding.
+
+---
+
+# QSAR Modeling
+
+## Required Packages
+
+```{r packages-step4}
+packages_qsar <- c("caret", "randomForest", "ggplot2", "dplyr", "knitr", "tidyr")
+
+for (p in packages_qsar) {
+  if (!(p %in% installed.packages())) {
+    install.packages(p, dependencies = TRUE, repos = "https://cloud.r-project.org")
+  }
+}
+invisible(lapply(packages_qsar, library, character.only = TRUE))
+set.seed(123)
+```
+
+## Prepare QSAR Dataset
+
+```{r prepare-qsar}
+qsar_df <- curated %>%
+  select(Compound, MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3, pIC50)
+
+# Convert descriptors to numeric
+qsar_df[, 2:8] <- lapply(qsar_df[, 2:8], as.numeric)
+
+# Remove rows with any NA descriptors
+qsar_df <- qsar_df %>% filter(complete.cases(.))
+
+cat("Final QSAR dataset:", nrow(qsar_df), "compounds\n")
+
+qsar_df$ActivityClass <- ifelse(qsar_df$pIC50 >= median(qsar_df$pIC50),
+                                 "High activity", "Low activity")
+```
+
+## Activity Distribution
+
+```{r activity-dist}
+ggplot(qsar_df, aes(x = pIC50)) +
+  geom_histogram(bins = 20, fill = "steelblue", colour = "black") +
+  theme_classic() +
+  labs(title = "Distribution of pIC50 Values", x = "pIC50", y = "Count")
+
+ggplot(qsar_df, aes(x = ActivityClass, y = pIC50, fill = ActivityClass)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.15, alpha = 0.6) +
+  theme_classic() +
+  labs(title = "High vs Low Activity Compounds", x = "Activity Class", y = "pIC50") +
+  theme(legend.position = "none")
+```
+
+## Train-Test Split (80/20)
+
+```{r train-test-split}
+# Hierarchical scaffold-based split using Tanimoto distance
+fp_dist <- dist(fp_matrix, method = "euclidean")
+fp_hclust <- hclust(fp_dist, method = "ward.D2")
+n_clusters <- 5
+cluster_assignments <- cutree(fp_hclust, k = n_clusters)
+
+# Assign 2 clusters to test (20%), 3 to train (80%)
+set.seed(123)
+test_clusters <- sample(1:n_clusters, 2)
+test_idx <- which(cluster_assignments %in% test_clusters)
+train_df <- qsar_df[-test_idx, ]
+test_df  <- qsar_df[test_idx, ]
+
+cat("Training set:", nrow(train_df), "compounds (clusters:", 
+    paste(setdiff(1:n_clusters, test_clusters), collapse = ","), ")\n")
+cat("Testing set:", nrow(test_df), "compounds (clusters:",
+    paste(test_clusters, collapse = ","), ")\n")
+
+# Descriptor-only matrices
+train_x <- train_df %>% select(MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3)
+test_x  <- test_df  %>% select(MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3)
+train_y <- train_df$pIC50
+test_y  <- test_df$pIC50
+```
+
+## Model 1: Multiple Linear Regression
+
+```{r lm-model}
+lm_model <- lm(pIC50 ~ MW + LogP + HBD + HBA + TPSA + RotB + FracCsp3, data = train_df)
+summary(lm_model)
+```
+
+## Model 2: Random Forest
+
+```{r rf-model}
+rf_model <- randomForest(
+  x = train_x,
+  y = train_y,
+  ntree = 500,
+  mtry = 3,
+  importance = TRUE
+)
+print(rf_model)
+```
+
+## Predictions on Test Set
+
+```{r predictions}
+prediction_df <- data.frame(
+  Compound = test_df$Compound,
+  Observed = test_y,
+  Linear_Regression = predict(lm_model, newdata = test_x),
+  Random_Forest = predict(rf_model, newdata = test_x)
+)
+
+kable(head(prediction_df, 10), caption = "Predicted vs Observed Activity (First 10 Test Compounds)")
+```
+
+## Model Evaluation Metrics
+
+```{r model-metrics}
+evaluate_model <- function(observed, predicted) {
+  rmse <- sqrt(mean((observed - predicted)^2))
+  mae  <- mean(abs(observed - predicted))
+  r2   <- cor(observed, predicted)^2
+  data.frame(RMSE = round(rmse, 3), MAE = round(mae, 3), R_squared = round(r2, 3))
+}
+
+lm_metrics <- evaluate_model(prediction_df$Observed, prediction_df$Linear_Regression)
+rf_metrics <- evaluate_model(prediction_df$Observed, prediction_df$Random_Forest)
+
+model_metrics <- rbind(
+  Linear_Regression = lm_metrics,
+  Random_Forest = rf_metrics
+)
+
+kable(model_metrics, caption = "QSAR Model Performance Metrics")
+```
+
+**Model Evaluation Interpretation:**
+RMSE tells us the average prediction error in pIC50 units. MAE is the mean absolute deviation. R-squared indicates the fraction of variance explained by the model. The Random Forest typically outperforms Linear Regression for kinase QSAR because kinase-ligand interactions involve non-linear relationships (e.g., optimal LogP windows, steric complementarity) that linear models cannot capture. However, RF results for real-world kinase data are often modest (RÂ² = 0.3â€“0.6) due to the complexity of binding and assay variability. This is scientifically expected and does not invalidate the model.
+
+## Predicted vs Observed Plot
+
+```{r pred-vs-obs}
+plot_long <- prediction_df %>%
+  pivot_longer(c(Linear_Regression, Random_Forest), names_to = "Model", values_to = "Predicted")
+
+ggplot(plot_long, aes(x = Observed, y = Predicted)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.8, colour = "red") +
+  facet_wrap(~ Model) +
+  theme_classic() +
+  labs(title = "Predicted vs Observed Activity", x = "Observed pIC50", y = "Predicted pIC50")
+```
+
+**Interpretation:** Points close to the diagonal indicate accurate predictions. Systematic deviation above or below the line indicates model bias. The spread of points reflects prediction uncertainty.
+
+## Residual Error Analysis
+
+```{r residuals}
+residual_df <- data.frame(
+  Compound = prediction_df$Compound,
+  Observed = prediction_df$Observed,
+  LM_Residual = prediction_df$Observed - prediction_df$Linear_Regression,
+  RF_Residual = prediction_df$Observed - prediction_df$Random_Forest
+)
+
+residual_long <- residual_df %>%
+  pivot_longer(c(LM_Residual, RF_Residual), names_to = "Model", values_to = "Residual")
+
+ggplot(residual_long, aes(x = Residual)) +
+  geom_histogram(bins = 15, fill = "steelblue", colour = "black") +
+  facet_wrap(~ Model) +
+  theme_classic() +
+  labs(title = "Residual Error Distribution", x = "Residual Error", y = "Count")
+
+# Residuals vs Predicted
+residual_plot_df <- plot_long %>% mutate(Residual = Observed - Predicted)
+
+ggplot(residual_plot_df, aes(x = Predicted, y = Residual)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_hline(yintercept = 0, linewidth = 0.8, colour = "red") +
+  facet_wrap(~ Model) +
+  theme_classic() +
+  labs(title = "Residuals vs Predicted Values", x = "Predicted pIC50", y = "Residual Error")
+```
+
+**Interpretation:** Residuals should be centred around zero with no obvious pattern versus predicted values. A funnel shape would indicate heteroscedasticity. Systematic patterns suggest the model is missing important descriptors.
+
+## Random Forest Feature Importance
+
+```{r rf-importance}
+importance_df <- data.frame(
+  Descriptor = rownames(importance(rf_model)),
+  Importance = importance(rf_model)[, "%IncMSE"]
+) %>% arrange(desc(Importance))
+
+kable(importance_df, caption = "Random Forest Descriptor Importance (%IncMSE)")
+
+ggplot(importance_df, aes(x = reorder(Descriptor, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_classic() +
+  labs(title = "Random Forest Descriptor Importance", x = "Descriptor", y = "Importance (%IncMSE)")
+```
+
+**Interpretation:** `%IncMSE` measures how much model accuracy decreases when a descriptor is randomly permuted. Higher values indicate the descriptor is more critical for prediction. This guides our understanding of which molecular properties drive LRRK2 inhibition.
+
+---
+
+# SAR & Chemical Space Analysis
+
+## SAR Summary Table
+
+```{r sar-summary}
+sar_summary <- qsar_df %>%
+  group_by(ActivityClass) %>%
+  summarise(
+    Mean_MW         = round(mean(MW, na.rm = TRUE), 1),
+    Mean_LogP       = round(mean(LogP, na.rm = TRUE), 2),
+    Mean_HBD        = round(mean(HBD, na.rm = TRUE), 1),
+    Mean_HBA        = round(mean(HBA, na.rm = TRUE), 1),
+    Mean_TPSA       = round(mean(TPSA, na.rm = TRUE), 1),
+    Mean_RotB       = round(mean(RotB, na.rm = TRUE), 1),
+    Mean_FracCsp3   = round(mean(FracCsp3, na.rm = TRUE), 3),
+    Mean_pIC50      = round(mean(pIC50), 2),
+    .groups = "drop"
+  )
+
+kable(sar_summary, caption = "SAR Summary: Mean Descriptor Values by Activity Class")
+```
+
+**SAR Interpretation:** Comparing mean descriptor values between high- and low-activity compounds reveals which molecular features are associated with stronger LRRK2 inhibition. Kinase inhibitors typically show moderate MW (350â€“550 Da), moderate LogP (2â€“4), and balanced HBD/HBA profiles.
+
+## Descriptor-Activity Scatter Plots
+
+```{r desc-scatter}
+desc_names <- c("MW", "LogP", "TPSA", "RotB", "FracCsp3")
+plot_list <- list()
+
+for (d in desc_names) {
+  p <- ggplot(qsar_df, aes_string(x = d, y = "pIC50")) +
+    geom_point(alpha = 0.7) +
+    geom_smooth(method = "loess", se = TRUE, colour = "red") +
+    theme_classic() +
+    labs(title = paste("pIC50 vs", d), x = d, y = "pIC50")
+  print(p)
+}
+```
+
+## PCA Chemical Space
+
+```{r pca}
+desc_matrix <- qsar_df %>% select(MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3)
+
+pca_result <- prcomp(desc_matrix, scale. = TRUE)
+
+pca_var <- data.frame(
+  PC = paste0("PC", 1:length(pca_result$sdev)),
+  Variance = round((pca_result$sdev^2) / sum(pca_result$sdev^2) * 100, 1)
+)
+
+ggplot(pca_var[1:7, ], aes(x = reorder(PC, -Variance), y = Variance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_classic() +
+  labs(title = "PCA Variance Explained", x = "Principal Component", y = "Variance Explained (%)") +
+  geom_text(aes(label = paste0(Variance, "%")), vjust = -0.5)
+
+pca_df <- data.frame(
+  Compound      = qsar_df$Compound,
+  PC1           = pca_result$x[, 1],
+  PC2           = pca_result$x[, 2],
+  pIC50         = qsar_df$pIC50,
+  ActivityClass = qsar_df$ActivityClass
+)
+
+ggplot(pca_df, aes(x = PC1, y = PC2, colour = pIC50)) +
+  geom_point(size = 3, alpha = 0.8) +
+  scale_colour_viridis_c(option = "plasma") +
+  theme_classic() +
+  labs(title = "PCA Chemical Space Coloured by pIC50", x = "PC1", y = "PC2", colour = "pIC50")
+
+ggplot(pca_df, aes(x = PC1, y = PC2, shape = ActivityClass, colour = ActivityClass)) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_classic() +
+  labs(title = "PCA: High vs Low Activity", x = "PC1", y = "PC2")
+```
+
+**PCA Interpretation:** PCA reduces 7 descriptors to 2 dimensions while preserving maximum variance. Compounds that cluster together share similar descriptor profiles. If high-activity compounds form distinct clusters, this suggests a well-defined SAR. The variance explained plot shows how much chemical diversity each PC captures.
+
+## t-SNE Chemical Space
+
+```{r tsne}
+library(Rtsne)
+set.seed(123)
+
+tsne_result <- Rtsne(
+  as.matrix(scale(desc_matrix)),
+  dims = 2, perplexity = min(15, floor((nrow(qsar_df) - 1) / 3)),
+  verbose = FALSE, max_iter = 1000,
+  check_duplicates = FALSE
+)
+
+tsne_df <- data.frame(
+  Compound      = qsar_df$Compound,
+  tSNE1         = tsne_result$Y[, 1],
+  tSNE2         = tsne_result$Y[, 2],
+  pIC50         = qsar_df$pIC50,
+  ActivityClass = qsar_df$ActivityClass
+)
+
+ggplot(tsne_df, aes(x = tSNE1, y = tSNE2, colour = pIC50)) +
+  geom_point(size = 3, alpha = 0.8) +
+  scale_colour_viridis_c(option = "plasma") +
+  theme_classic() +
+  labs(title = "t-SNE Chemical Space Coloured by pIC50", x = "t-SNE 1", y = "t-SNE 2", colour = "pIC50")
+
+ggplot(tsne_df, aes(x = tSNE1, y = tSNE2, shape = ActivityClass, colour = ActivityClass)) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_classic() +
+  labs(title = "t-SNE: High vs Low Activity", x = "t-SNE 1", y = "t-SNE 2")
+```
+
+**t-SNE Interpretation:** Unlike PCA (linear), t-SNE preserves local neighbourhoods. Tight clusters of high-activity compounds indicate structurally similar actives, while scattered actives suggest multiple chemotypes can inhibit LRRK2. t-SNE is sensitive to the perplexity parameter; low perplexity reveals fine local structure.
+
+## Chemical Space Coverage
+
+```{r space-coverage}
+qsar_df$Set <- ifelse(qsar_df$Compound %in% train_df$Compound, "Training", "Testing")
+
+pca_set_df <- pca_df %>%
+  left_join(qsar_df %>% select(Compound, Set), by = "Compound")
+
+ggplot(pca_set_df, aes(x = PC1, y = PC2, shape = Set, colour = Set)) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_classic() +
+  labs(title = "Chemical Space Coverage: Training vs Testing", x = "PC1", y = "PC2")
+```
+
+**Coverage Interpretation:** The test set should occupy similar chemical space as the training set. If test compounds lie far outside the training distribution, model predictions become unreliable extrapolations.
+
+---
+
+# Virtual Screening
+
+## Similarity-Based Screening
+
+We use the most potent known LRRK2 inhibitor as the query molecule for similarity searching. The query is the compound with the highest pIC50 in our dataset.
+
+```{r similarity-screening}
+# Identify the query: compound with highest pIC50
+query_idx <- which.max(curated$pIC50)
+query_fp <- fps[[query_idx]]
+
+cat("Query compound:", curated$Compound[query_idx])
+cat("\nQuery pIC50:", curated$pIC50[query_idx])
+cat("\nQuery SMILES:", curated$canonical_smiles[query_idx], "\n")
+
+# Compute Tanimoto similarity of all compounds to query
+tanimoto_scores <- sapply(fps[1:nrow(curated)], function(fp) {
+  1 - fingerprint::distance(query_fp, fp, method = "tanimoto")
+})
+
+curated$Tanimoto_to_Lead <- as.numeric(tanimoto_scores)
+
+screening_df <- curated %>%
+  select(Compound, molecule_chembl_id, pIC50, Tanimoto_to_Lead) %>%
+  arrange(desc(Tanimoto_to_Lead))
+
+kable(head(screening_df, 15), caption = "Similarity-Based Screening Results (Top 15)")
+```
+
+## Similarity Ranking Visualisation
+
+```{r similarity-plots}
+ggplot(screening_df %>% head(30), aes(x = reorder(Compound, Tanimoto_to_Lead), y = Tanimoto_to_Lead)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_classic() +
+  labs(title = "Top 30 Compounds by Similarity to Most Potent LRRK2 Inhibitor",
+       x = "Compound", y = "Tanimoto Similarity")
+
+# Screening curve
+screening_ranked <- screening_df %>%
+  mutate(Rank = row_number()) %>%
+  filter(Rank <= 100)
+
+ggplot(screening_ranked, aes(x = Rank, y = Tanimoto_to_Lead)) +
+  geom_line(colour = "steelblue") +
+  geom_point(size = 2, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "Virtual Screening Ranking Curve", x = "Rank", y = "Tanimoto Similarity to Lead")
+```
+
+**Similarity Screening Interpretation:** The ranking curve shows how quickly similarity drops as we move away from the query. A steep initial drop followed by a plateau is typical and indicates that only a few compounds are close structural analogues. The Tanimoto threshold for considering a compound as a meaningful analogue in kinase screening is typically 0.5â€“0.7.
+
+## QSAR-Based Virtual Screening
+
+We use our trained Random Forest model to predict pIC50 for all compounds. This provides an orthogonal screening method.
+
+```{r qsar-screening}
+all_desc <- qsar_df %>% select(MW, LogP, HBD, HBA, TPSA, RotB, FracCsp3)
+all_predicted <- predict(rf_model, newdata = all_desc)
+
+curated$QSAR_Predicted_pIC50 <- round(all_predicted, 2)
+
+# Rank by QSAR prediction
+qsar_screening <- curated %>%
+  select(Compound, molecule_chembl_id, pIC50, QSAR_Predicted_pIC50, Tanimoto_to_Lead) %>%
+  arrange(desc(QSAR_Predicted_pIC50))
+
+kable(head(qsar_screening, 15), caption = "QSAR-Based Screening Results (Top 15 by Predicted pIC50)")
+```
+
+## Combined Screening Score
+
+```{r combined-screening}
+# Normalise both scores to 0-1 and combine (Novelty-Driven)
+curated <- curated %>%
+  mutate(
+    Sim_Norm = (Tanimoto_to_Lead - min(Tanimoto_to_Lead, na.rm = TRUE)) /
+               (max(Tanimoto_to_Lead, na.rm = TRUE) - min(Tanimoto_to_Lead, na.rm = TRUE)),
+    Novelty_Norm = 1 - Sim_Norm,
+    QSAR_Norm = (QSAR_Predicted_pIC50 - min(QSAR_Predicted_pIC50, na.rm = TRUE)) /
+                (max(QSAR_Predicted_pIC50, na.rm = TRUE) - min(QSAR_Predicted_pIC50, na.rm = TRUE)),
+    Combined_Score = 0.5 * Novelty_Norm + 0.5 * QSAR_Norm
+  ) %>%
+  arrange(desc(Combined_Score))
+
+kable(head(curated %>% select(Compound, pIC50, Tanimoto_to_Lead, Novelty_Norm, QSAR_Predicted_pIC50, Combined_Score), 10),
+      caption = "Combined Screening Ranking (Top 10 Novel & Potent Candidates)")
+```
+
+---
+
+# Molecular Docking
+
+## Protein Preparation
+
+**LRRK2 Kinase Domain Structure**
+
+The LRRK2 kinase domain has been co-crystallised with several inhibitors. Recommended PDB structures:
+
+| PDB ID | Resolution | Ligand | Reference |
+|--------|-----------|--------|-----------|
+| **6VNO** | 2.6 Ã… | MLi-2 | PMID: 31488837 |
+| **7LHW** | 2.8 Ã… | GNE-7915 | PMID: 33577766 |
+
+**Using AutoDock Vina / PyRx:**
+
+1. Download the PDB file from [RCSB PDB](https://www.rcsb.org/) (search for `6VNO` or `7LHW`)
+2. Open in PyRx or prepare with AutoDock Tools:
+   - Remove water molecules and heteroatoms (except the co-crystallised ligand)
+   - Add polar hydrogens
+   - Assign Gasteiger charges
+   - Save as PDBQT format
+
+**Binding Site Definition:**
+
+The ATP-binding pocket of the LRRK2 kinase domain is defined by:
+- **Hinge region:** Residues Ala1950â€“Glu1954 (where the inhibitor core binds via H-bonds)
+- **Gatekeeper:** Met1947 (controls access to the hydrophobic back pocket)
+- **DFG motif:** Asp2017â€“Phe2018â€“Gly2019 (DFG-in = active, DFG-out = inactive conformation)
+
+Set the grid box centred on the co-crystallised ligand coordinates. Typical grid dimensions for LRRK2 kinase: 20 Ã— 20 Ã— 20 Ã… with 1 Ã… spacing.
+
+### 7.1.1 AlphaFold Structure Preparation
+
+For this project, we used **AlphaFold2** via the Google Colab notebook
+([AlphaFold2.ipynb](https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/AlphaFold2.ipynb))
+to predict the LRRK2 kinase domain structure.
+
+**FASTA sequence used:** Kinase domain only (residues 1875â€“2132), extracted
+from the full-length LRRK2 sequence (UniProt: Q5S007). Using only the kinase
+domain (258 residues, ~30 kDa) rather than the full 2527-residue protein
+prevents memory crashes and GPU OOM errors on Colab's free tier.
+
+The predicted structure was aligned with the experimental PDB 6VNO
+(RMSD < 1.2 Ã… over the kinase domain C-alpha atoms), confirming high
+structural agreement. AlphaFold confidence scores (pLDDT) were >90 for
+the ATP-binding pocket residues, supporting the use of this model for
+docking when experimental structures are limited.
+
+## Ligand Selection for Docking (Max 10 Compounds)
+
+```{r docking-selection}
+# Select top compounds from novelty-driven combined screening
+top_n_docking <- 8
+
+docking_candidates <- curated %>%
+  head(top_n_docking) %>%
+  select(Compound, molecule_chembl_id, canonical_smiles, pIC50, 
+         QSAR_Predicted_pIC50, Novelty_Norm)
+
+kable(docking_candidates,
+      caption = paste("Top", top_n_docking, "Compounds Selected for Docking"))
+
+# Export SMILES for ligand preparation
+write.csv(docking_candidates, "docking_candidates.csv", row.names = FALSE)
+cat("Ligand SMILES exported to 'docking_candidates.csv'\n")
+```
+
+## Ligand Preparation (AutoDock Tools / PyRx)
+
+For each of the 10 selected compounds:
+
+1. Convert SMILES to 3D structure (use PyRx's Open Babel or RDKit)
+2. Perform energy minimisation (UFF or MMFF94 force field)
+3. Add Gasteiger charges
+4. Detect rotatable bonds
+5. Save as individual PDBQT files
+
+## Docking Execution
+
+We used PyRx for docking, it's a GUI for tools like AutoDock Vina, OpenBabel etcetra.
+
+```{r docking-params, eval=FALSE}
+# Pseudo-code for Vina configuration
+# exhaustiveness = 8
+# num_modes = 9
+# energy_range = 3
+# grid center: based on co-crystallised ligand coordinates
+# grid size: 20 x 20 x 20 Ã…
+```
+
+## Docking Results
+
+*After running AutoDock Vina/PyRx, results table:*
+
+```{r docking-results-table}
+docking_results <- data.frame(
+  Compound = c("Cmpd_001", "Cmpd_007", "Cmpd_010", "Cmpd_011", "Cmpd_015", "Cmpd_017", "Cmpd_024", "Cmpd_025"),
+  Binding_Affinity_kcal_mol = c(-8.6, -8.0, -7.9, -8.0, -7.6, -7.8, -7.4, -7.4),
+  RMSD_lb = c(0, 0, 0, 0, 0, 0, 0, 0),
+  RMSD_ub = c(0, 0, 0, 0, 0, 0, 0, 0)
+)
+
+kable(docking_results, caption = "Molecular Docking Results (Top Poses)")
+```
+
+**Docking Interpretation:**
+- Binding affinity (kcal/mol): more negative = stronger predicted binding
+- RMSD lower bound (lb) and upper bound (ub): measure pose clustering. Low values (<2 Ã…) indicate consistent binding mode predictions
+- Compare docked poses against the co-crystallised ligand to assess whether the compounds bind in the same orientation
+
+---
+
+# ADMET & Toxicity Filtering
+
+## Lipinski Rule of 5
+
+```{r lipinski}
+curated <- curated %>%
+  mutate(
+    Lipinski_MW   = ifelse(MW <= 500, "Pass", "Violation"),
+    Lipinski_LogP = ifelse(LogP <= 5, "Pass", "Violation"),
+    Lipinski_HBD  = ifelse(HBD <= 5, "Pass", "Violation"),
+    Lipinski_HBA  = ifelse(HBA <= 10, "Pass", "Violation"),
+    Lipinski_Violations = (MW > 500) + (LogP > 5) + (HBD > 5) + (HBA > 10)
+  )
+
+lipinski_summary <- curated %>%
+  group_by(Lipinski_Violations) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  arrange(Lipinski_Violations)
+
+kable(lipinski_summary, caption = "Lipinski Rule of 5 Violation Summary")
+
+# Lipinski compliance for docking candidates
+lipinski_candidates <- curated %>%
+  filter(Compound %in% docking_candidates$Compound) %>%
+  select(Compound, MW, LogP, HBD, HBA, Lipinski_Violations)
+
+kable(lipinski_candidates, caption = "Lipinski Assessment for Docking Candidates")
+```
+
+## Veber Rules & Additional Filters
+
+```{r veber}
+curated <- curated %>%
+  mutate(
+    Veber_RotB = ifelse(RotB <= 10, "Pass", "Violation"),
+    Veber_TPSA = ifelse(TPSA <= 140, "Pass", "Violation"),
+    Veber_Violations = (RotB > 10) + (TPSA > 140)
+  )
+
+admet_summary <- curated %>%
+  summarise(
+    Lipinski_Pass = sum(Lipinski_Violations <= 1),
+    Lipinski_Total = n(),
+    Veber_Pass = sum(Veber_Violations == 0),
+    Veber_Total = n(),
+    Full_Compliance = sum(Lipinski_Violations <= 1 & Veber_Violations == 0),
+    .groups = "drop"
+  )
+
+kable(admet_summary, caption = "Overall ADMET Compliance Summary")
+```
+
+## ADMET Profile Visualisation
+
+```{r admet-plots}
+# Lipinski space plot for docking candidates
+top_admet <- curated %>% filter(Compound %in% docking_candidates$Compound)
+
+ggplot(curated, aes(x = MW, y = LogP)) +
+  geom_point(alpha = 0.4, colour = "grey70") +
+  geom_point(data = top_admet, aes(colour = factor(Lipinski_Violations)), size = 3) +
+  geom_vline(xintercept = 500, linetype = "dashed", colour = "red") +
+  geom_hline(yintercept = 5, linetype = "dashed", colour = "red") +
+  annotate("rect", xmin = -Inf, xmax = 500, ymin = -Inf, ymax = 5,
+           fill = "green", alpha = 0.03) +
+  theme_classic() +
+  labs(title = "Lipinski Space: MW vs LogP",
+       subtitle = "Red dashed lines = Lipinski thresholds. Docking candidates highlighted.",
+       x = "Molecular Weight (Da)", y = "LogP", colour = "Lipinski Violations")
+```
+
+**ADMET Interpretation:**
+- **Lipinski Rule of 5** predicts oral bioavailability. Molecules with >1 violation have lower probability of being orally active.
+- **Veber Rules** add rotatable bond (â‰¤10) and TPSA (â‰¤140) constraints, relevant for good bioavailability.
+- For CNS targets like LRRK2 (brain penetrant required for PD), more stringent rules apply: MW <400, TPSA <90, LogP 1â€“3, HBD <3 (Pajouhesh & Lenz, 2011). We flag compounds meeting these CNS criteria.
+
+## CNS Drug-Likeness
+
+```{r cns-druglikeness}
+curated <- curated %>%
+  mutate(
+    CNS_MPO_MW   = ifelse(MW < 400, 1, 0),
+    CNS_MPO_LogP = ifelse(LogP >= 1 & LogP <= 4, 1, 0),
+    CNS_MPO_TPSA = ifelse(TPSA < 90, 1, 0),
+    CNS_MPO_HBD  = ifelse(HBD < 3, 1, 0),
+    CNS_MPO_Score = CNS_MPO_MW + CNS_MPO_LogP + CNS_MPO_TPSA + CNS_MPO_HBD
+  )
+
+cns_candidates <- curated %>%
+  filter(Compound %in% docking_candidates$Compound) %>%
+  select(Compound, MW, LogP, TPSA, HBD, CNS_MPO_Score)
+
+kable(cns_candidates, caption = "CNS Drug-Likeness Assessment for Docking Candidates")
+```
+
+---
+
+# Multi-Parameter Lead Prioritisation
+
+## Composite Scoring
+
+We combine all evidence to rank compounds and select 1â€“2 final lead candidates.
+
+Scoring criteria (each normalised 0â€“1):
+- **Bioactivity:** Measured pIC50 from ChEMBL
+- **Docking Score:** Binding affinity from AutoDock Vina (reverse Min-Max scaled)
+- **Structural Novelty:** 1 â€“ Tanimoto to known inhibitor (rewards chemotype diversity)
+- **ADMET Compliance:** Lipinski + Veber rule compliance
+- **CNS Drug-Likeness:** Blood-brain barrier potential (Pfizer MPO scale, max 6)
+
+```{r lead-prioritisation}
+# Docking results
+# Most negative = strongest binding
+docking_scores <- data.frame(
+  Compound = c("Cmpd_001", "Cmpd_007", "Cmpd_010", "Cmpd_011", "Cmpd_015", "Cmpd_017", "Cmpd_024", "Cmpd_025"),
+  Vina_Score = c(-8.6, -8.0, -7.9, -8.0, -7.6, -7.8, -7.4, -7.4)
+)
+
+# Reverse Min-Max scaling: most negative score gets highest points
+docking_scores <- docking_scores %>%
+  mutate(
+    Docking_Norm = 1 - (Vina_Score - min(Vina_Score, na.rm = TRUE)) /
+                       (max(Vina_Score, na.rm = TRUE) - min(Vina_Score, na.rm = TRUE))
+  )
+
+prioritisation <- curated %>%
+  filter(Compound %in% docking_candidates$Compound) %>%
+  left_join(docking_scores, by = "Compound") %>%
+  mutate(
+    # Normalise pIC50 (0-1)
+    pIC50_Norm = (pIC50 - min(curated$pIC50)) / (max(curated$pIC50) - min(curated$pIC50)),
+    # Structural novelty (inverse of similarity)
+    Novelty_Norm = 1 - Sim_Norm,
+    # ADMET score: higher = better
+    ADMET_Score = (4 - Lipinski_Violations) / 4 + (2 - Veber_Violations) / 2,
+    # CNS bonus (Pfizer MPO scale, max 6)
+    CNS_Bonus = CNS_MPO_Score / 6,
+    # Overall priority score: potency + novelty + docking + ADMET + CNS
+    Priority_Score = 0.20 * pIC50_Norm + 0.15 * Novelty_Norm + 0.25 * Docking_Norm +
+                     0.25 * ADMET_Score + 0.15 * CNS_Bonus
+  ) %>%
+  arrange(desc(Priority_Score)) %>%
+  select(Compound, molecule_chembl_id, pIC50, Vina_Score, Docking_Norm,
+         Novelty_Norm, Lipinski_Violations, CNS_MPO_Score, Priority_Score)
+
+kable(prioritisation, caption = "Multi-Parameter Lead Prioritisation")
+```
+
+## Priority Score Visualisation
+
+```{r priority-plot}
+ggplot(prioritisation, aes(x = reorder(Compound, Priority_Score), y = Priority_Score)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_classic() +
+  labs(title = "Lead Candidate Priority Scores", x = "Compound", y = "Priority Score")
+```
+
+## Final Lead Selection
+
+**Final Lead Compound 1:** *[Insert top-ranked compound ID here after docking]*
+
+- **Rationale:** Highest combined priority score, strong QSAR prediction, favourable docking pose in LRRK2 ATP pocket, clean ADMET profile, reasonable CNS drug-likeness.
+
+**Final Lead Compound 2:** *[Insert second-ranked compound ID here after docking]*
+
+- **Rationale:** Good priority score with structural novelty (lower Tanimoto to known inhibitors), offering an alternative chemotype and backup scaffold.
+
+**Post-Docking Analysis Required:**
+1. Inspect binding poses: Do the leads form H-bonds with the hinge region (Ala1950)?
+2. Assess hydrophobic contacts with the selectivity pocket (near Met1947)
+3. Compare with co-crystallised inhibitor (MLi-2 or GNE-7915) pose
+4. Verify no steric clashes with protein residues
+
+---
+
+# Summary & Conclusions
+
+## Pipeline Summary
+
+| Step | Method | Key Output |
+|------|--------|------------|
+| 1. Target Selection | Open Targets + PubMed | LRRK2 strongly validated for Parkinson's |
+| 2. Data Collection | ChEMBL REST API | Curated bioactivity dataset |
+| 3. Descriptors | rcdk (8 descriptors + ECFP4 fingerprints) | Numerical feature matrix |
+| 4. QSAR Modeling | Linear Regression + Random Forest | Predicted pIC50 with RMSE/MAE/RÂ² |
+| 5. Chemical Space | PCA + t-SNE | Activity-enriched chemical space |
+| 6. Virtual Screening | Tanimoto similarity + QSAR prediction | Ranked compound library |
+| 7. Molecular Docking | AutoDock Vina (max 10 compounds) | Binding affinities and poses |
+| 8. ADMET Filtering | Lipinski + Veber + CNS criteria | Drug-likeness assessment |
+| 9. Lead Prioritisation | Multi-parameter composite scoring | 2 final lead compounds |
+
+
+## Critical Interpretation
+
+- **QSAR Limitations:** Our models are based on 2D descriptors and cannot capture 3D conformational effects. Real LRRK2 inhibition involves induced-fit binding and water-mediated interactions not represented in our descriptors.
+- **Screening Scope:** Virtual screening is ligand-based (similarity + QSAR). A full pipeline would also include structure-based pharmacophore screening and consensus approaches.
+- **Docking Accuracy:** AutoDock Vina scoring functions are approximate. Binding affinities should be interpreted as relative rankings, not absolute predictions. Experimental validation is essential.
+- **ADMET Predictions:** Our rule-based ADMET assessment is a first-pass filter. In practice, more sophisticated models (e.g., SwissADME, pkCSM) would be used for ADMET prediction.
+- **Kinase Selectivity:** LRRK2 inhibitors must be selective against other kinases (especially other leucine-rich repeat kinases). This is a critical consideration not addressed in our current pipeline â€” selectivity profiling would be an essential next step. 
+
+## References
+
+1. Open Targets Platform â€” https://platform.opentargets.org
+2. ChEMBL Database â€” https://www.ebi.ac.uk/chembl/
+3. RCSB Protein Data Bank â€” https://www.rcsb.org/
+4. RDKit / rcdk â€” Open-source cheminformatics
+5. AutoDock Vina â€” Trott & Olson (2010), *J. Comput. Chem.*
+6. Lipinski et al. (2001), *Adv. Drug Deliv. Rev.*
+7. Pajouhesh & Lenz (2011), *NeuroRx* (CNS drug-likeness criteria)
+8. Henderson et al. (2015) â€” LRRK2 structure, *ACS Chem. Biol.*
+9. West (2015) â€” LRRK2 inhibitors review, *J. Med. Chem.*
