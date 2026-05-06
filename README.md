@@ -29,6 +29,12 @@ invisible(lapply(required_packages, library, character.only = TRUE))
 Sys.setenv(JAVA_HOME = "C:/Program Files/Java/jdk-21.0.11")
 ```
 
+## Sequence
+Use this protein sequence in Alphafold Colab.
+```text
+QAPEFLLGDGSFGSVYRAAYEGEEVAVKIFNKHTSLRLLRQELVVLCHLHHPSLISLLAAGIRPRMLVMELASKGSLDRLLQQDKASLTRTLQHRIALHVADGLRYLHSAMIIYRDLKPHNVLLFTLYPNAAIIAKIADYGIAQYCCRMGIKTSEGTPGFRAPEVARGNVIYNQQADVYSFGLLLYDILTTGGRIVEGLKFPNEFDELEIQGKLPDPVKEYGCAPWPMVEKLIKQCLKENPQERPTSAQVFDILNSAELV
+```
+
 ## Steps
 
 > Feel free to download the provided Rmd file & use that to run code blocks. 
@@ -81,7 +87,7 @@ write.csv(head(curated, 8), "docking_candidates.csv", row.names = FALSE)
 
 Fold the target protein and run docking simulation outside of R.
 ```text
-# 1. Provide LRRK2 Kinase domain sequence (Residues 1875–2132) to AlphaFold2.
+# 1. Provide LRRK2 Kinase domain sequence (Residues 1879-2138) to AlphaFold2.
 # 2. Prepare AlphaFold .pdb receptor and ligand .pdbqt files in PyRx.
 # 3. Execute AutoDock Vina against ATP-binding pocket (Met1947 gatekeeper).
 ```
