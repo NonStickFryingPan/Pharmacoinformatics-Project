@@ -1,79 +1,117 @@
-# In Silico Drug Discovery Pipeline — LRRK2 Inhibitors for Parkinson's Disease
+<div align="center">
 
-This repository contains an end-to-end computational drug discovery pipeline written in R. The pipeline identifies novel, potent, and safe lead compounds targeting **Leucine-Rich Repeat Kinase 2 (LRRK2)**, a heavily validated genetic target for **Parkinson's Disease**.
+# 🧬 LRRK2 In Silico Drug Discovery
+**End-to-end R pipeline identifying novel, CNS-penetrant LRRK2 inhibitors for Parkinson's Disease.**
 
-By combining API-driven data curation, cheminformatics, machine learning (QSAR), and 3D molecular docking, this project circumvents traditional wet-lab limitations and algorithmically explicitly hunts for **structural novelty**.
+[![R](https://img.shields.io/badge/R-276DC3?style=flat-square&logo=r&logoColor=white)](#)
+[![ChEMBL](https://img.shields.io/badge/ChEMBL-Data-00A68A?style=flat-square)](#)
+[![AutoDock Vina](https://img.shields.io/badge/AutoDock_Vina-Docking-FF6F00?style=flat-square)](#)
 
----
+[Overview](#overview) · [Setup](#setup) · [Steps](#steps) · [Results](#results) · [Glossary](#glossary) ·[Reference](#reference)
 
-## 🚀 Final Identified Lead Compound
-
-Out of thousands of compounds screened, the pipeline identified **CHEMBL2152707 (Cmpd_001)** as the clear winner through our multi-parameter priority scoring formula. 
-
-* **ChEMBL ID:** CHEMBL2152707
-* **Max Phase:** Preclinical
-* **Molecular Formula:** C18H21N5O
-* **Molecular Weight:** 323.40
-* **Molecule Type:** Small molecule
-* **Canonical SMILES:** `Cn1cc(/C=C/c2n[nH]c3ccnc(OC4CCCCC4)c23)cn1`
-
-This compound successfully achieved an ideal balance of predicted high potency, excellent structural novelty, optimal docking affinity in the LRRK2 kinase pocket, and perfect compliance with CNS (Blood-Brain Barrier) penetration parameters.
+</div>
 
 ---
 
-## 🧪 Pipeline Overview
+## Overview
+Computational pipeline predicting LRRK2 kinase domain inhibitors using QSAR modeling, structural novelty scoring, and molecular docking. Data is LRRK2 bioactivity measurements sourced from the[ChEMBL Database](https://www.ebi.ac.uk/chembl/).
 
-The computational pipeline executes across 9 sequential phases:
-
-1. **Target Selection:** Validates LRRK2 using the Open Targets GraphQL API and PubMed literature.
-2. **Data Collection:** Fetches bioactivity data (IC50) dynamically via the ChEMBL REST API.
-3. **Featurization:** Calculates 1D/2D physicochemical properties and ECFP4 Circular Fingerprints using the `rcdk` package.
-4. **QSAR Modeling:** Trains a Random Forest machine learning model on a hierarchical scaffold-split to predict pIC50 based on molecular structure.
-5. **Chemical Space:** Projects multi-dimensional chemical data into 2D space using PCA (global) and t-SNE (local neighborhoods) to validate SAR.
-6. **Virtual Screening:** Evaluates the library using a custom algorithm that rewards both *predicted potency* and *structural novelty*.
-7. **3D Preparation & Docking:** Utilizes **AlphaFold2** to generate the LRRK2 kinase domain receptor, and AutoDock Vina / PyRx to predict binding affinity (kcal/mol).
-8. **ADMET Filtering:** Applies Lipinski's Rule of 5, Veber filters, and the Pfizer CNS Multi-Parameter Optimization (MPO) boundaries to ensure safety and blood-brain barrier penetration.
-9. **Priority Scoring:** Ranks the final candidates using a composite mathematical formula, identifying the final lead compound.
-
----
-
-## 💻 Reproducibility Instructions
-
-To reproduce the analysis locally, follow these steps:
-
-### 1. Prerequisites
-You will need **R** and **RStudio** installed.
-Because the pipeline relies on the Chemistry Development Kit (`rcdk`), you **must** have a Java Development Kit (JDK) installed (e.g., JDK 21). 
-
-Ensure your `JAVA_HOME` path is correctly set in your R environment before running. Inside the R script, adjust the following line to match your system path:
+## Setup
+Install dependencies and configure the environment.
 ```R
-Sys.setenv(JAVA_HOME = "C:/Program Files/Java/jdk-21.0.11") # Adjust to your JDK path
+# Install cheminformatics and modeling packages
+required_packages <- c("httr2", "dplyr", "rcdk", "fingerprint", "randomForest", "ggplot2", "Rtsne")
+to_install <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(to_install) > 0) install.packages(to_install)
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+# Point rcdk to Java installation
+Sys.setenv(JAVA_HOME = "C:/Program Files/Java/jdk-21.0.11")
 ```
 
-### 2. Install Required Packages
-The script is designed to automatically install missing packages. It relies on:
-`httr2`, `jsonlite`, `dplyr`, `tibble`, `purrr`, `tidyr`, `ggplot2`, `DT`, `stringr`, `scales`, `rentrez`, `knitr`, `rcdk`, `fingerprint`, `caret`, `randomForest`, `Rtsne`.
+## Steps
 
-### 3. Run the Pipeline
-Open the provided `.Rmd` file in RStudio and click **Knit**, or run the chunks sequentially. This will recreate the data curation, QSAR modeling, chemical space visualization, and 2D virtual screening.
+Query Open Targets and ChEMBL APIs for raw target validation and bioactivity data.
+```R
+# Fetch LRRK2 (CHEMBL1075104) IC50 data
+url <- "https://www.ebi.ac.uk/chembl/api/data/activity.json?target_chembl_id=CHEMBL1075104&standard_type__in=IC50,Ki&limit=500"
+req <- httr2::request(url) %>% httr2::req_headers(Accept = "application/json")
+raw_data <- httr2::resp_body_json(httr2::req_perform(req), simplifyVector = TRUE)
 
-### 4. AlphaFold2 & 3D Molecular Docking
-Because LRRK2 is massive (>2500 amino acids), computing its 3D structure locally is resource-prohibitive.
-1. We utilized the Google Colab environment to fold the Kinase Domain (residues 1875–2132). 
-2. **Colab Link Used:** [AlphaFold2.ipynb (sokrypton/ColabFold)](https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/AlphaFold2.ipynb)
-3. Download the resulting `.pdb` file.
-4. Export the top docking candidates' SMILES from the R script.
-5. Use **PyRx / AutoDock Vina** locally to prepare the ligands (PDBQT format) and dock them into the ATP-binding pocket of the AlphaFold receptor.
+# Filter exact measurements and convert to pIC50 scale
+curated <- raw_data %>%
+  filter(standard_relation == "=", standard_units %in% c("nM", "uM", "M")) %>%
+  mutate(pIC50 = -log10(standard_value * 1e-9)) # assuming nM base for example
+```
 
----
+Convert SMILES to 3D molecules, calculate properties, and generate topological fingerprints.
+```R
+# Parse SMILES strings into molecular objects
+mols <- parse.smiles(curated$canonical_smiles)
 
-## 📚 Glossary
+# Calculate physicochemical descriptors
+desc_vals <- eval.desc(mols, c("org.openscience.cdk.qsar.descriptors.molecular.WeightDescriptor", "org.openscience.cdk.qsar.descriptors.molecular.XLogPDescriptor"))
 
-* **pIC50:** The negative base-10 logarithm of the IC50 value (in Molar). It linearizes dose-response data. A higher pIC50 means higher potency (e.g., pIC50 9 = 1 nM).
-* **QSAR (Quantitative Structure-Activity Relationship):** A machine learning approach that models the relationship between a molecule's mathematical features (descriptors) and its biological activity.
-* **ECFP4 (Extended-Connectivity Fingerprints):** A method to digitize molecules into a binary string by hashing the topological neighborhoods (up to radius 2) of every atom.
-* **t-SNE:** A statistical method for visualizing high-dimensional data by giving each datapoint a location in a two or three-dimensional map, preserving local data clusters.
-* **AlphaFold2:** An AI program developed by DeepMind that performs highly accurate predictions of protein 3D structures directly from amino acid sequences.
-* **Molecular Docking:** A computational simulation of a candidate ligand binding to a protein receptor to predict the preferred orientation and calculate binding affinity (kcal/mol).
-* **ADMET:** Absorption, Distribution, Metabolism, Excretion, and Toxicity. The pharmacokinetic profile of a drug.
-* **CNS MPO (Central Nervous System Multi-Parameter Optimization):** An algorithm developed by Pfizer that uses properties like LogP, Molecular Weight, and TPSA to predict if a drug can successfully cross the Blood-Brain Barrier.
+# Generate Extended-Connectivity Fingerprints (ECFP4) for machine learning
+fps <- lapply(mols, get.fingerprint, type = "circular")
+fp_matrix <- do.call(rbind, lapply(fps, function(x) as.numeric(x@bits)))
+```
+
+Train a Random Forest model on scaffold-split chemical data to predict pIC50.
+```R
+# Train Random Forest to predict potency based on descriptors
+rf_model <- randomForest(x = train_x, y = train_y, ntree = 500, mtry = 3, importance = TRUE)
+
+# Predict activity for test compounds
+all_predicted <- predict(rf_model, newdata = all_desc)
+```
+
+Filter candidates by structural novelty and export for physical docking validation.
+```R
+# Combine Novelty (1 - Tanimoto) and QSAR predictions into a screening score
+curated <- curated %>%
+  mutate(Combined_Score = 0.5 * Novelty_Norm + 0.5 * QSAR_Norm) %>%
+  arrange(desc(Combined_Score))
+
+# Export top 8 candidates
+write.csv(head(curated, 8), "docking_candidates.csv", row.names = FALSE)
+```
+
+Fold the target protein and run docking simulation outside of R.
+```text
+# 1. Provide LRRK2 Kinase domain sequence (Residues 1875–2132) to AlphaFold2.
+# 2. Prepare AlphaFold .pdb receptor and ligand .pdbqt files in PyRx.
+# 3. Execute AutoDock Vina against ATP-binding pocket (Met1947 gatekeeper).
+```
+
+Calculate composite score factoring potency, novelty, safety, and CNS penetration.
+```R
+# Rank leads using a normalized multi-parameter matrix
+prioritisation <- curated %>%
+  mutate(
+    Priority_Score = 0.20 * pIC50_Norm + 0.15 * Novelty_Norm + 
+                     0.25 * Docking_Norm + 0.25 * ADMET_Score + 0.15 * CNS_Bonus
+  ) %>%
+  arrange(desc(Priority_Score))
+```
+
+## Results
+
+| Visual / Output | Description |
+| :--- | :--- |
+| **Feature Importance Plot** | Horizontal bar chart of `%IncMSE` showing `LogP` and `MW` drive inhibition. |
+| **Chemical Space Map** | t-SNE scatter plot clustering structurally similar active compounds. |
+| **CNS MPO Radar Chart** | Overlay of candidate footprint vs optimal Blood-Brain Barrier limits. |
+| **Priority Score Bar Chart** | Final ranking of docked compounds based on multi-parameter matrix. |
+| **Lead Candidate** | **`CHEMBL2152707`** emerges as the top novel, safe, CNS-penetrant inhibitor. |
+
+## Glossary
+* **pIC50**: Negative log of the IC50 value. Linearizes dose-response for machine learning.
+* **ECFP4**: Extended-Connectivity Fingerprints. Converts molecular topology into binary arrays.
+* **QSAR**: Quantitative Structure-Activity Relationship. Statistical model linking chemical structure to biological activity.
+* **t-SNE**: Algorithm used to visualize high-dimensional chemical fingerprints in 2D space.
+* **ADMET**: Absorption, Distribution, Metabolism, Excretion, and Toxicity.
+* **CNS MPO**: Multi-Parameter Optimization score specifically for predicting Blood-Brain Barrier permeability.
+
+## Reference
+Protein structure folding powered by AlphaFold2 Colab:[https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/AlphaFold2.ipynb](https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/AlphaFold2.ipynb)
