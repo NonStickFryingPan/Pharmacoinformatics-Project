@@ -7,7 +7,7 @@
 [![ChEMBL](https://img.shields.io/badge/ChEMBL-Data-00A68A?style=flat-square)](#)
 [![AutoDock Vina](https://img.shields.io/badge/AutoDock_Vina-Docking-FF6F00?style=flat-square)](#)
 
-[Overview](#overview) · [Setup](#setup) · [Steps](#steps) · [Results](#results) · [Glossary](#glossary) ·[Reference](#reference)
+[Overview](#overview) · [Setup](#setup) · [Steps](#steps) · [Results](#results) · [Glossary](#glossary) · [Reference](#reference) · [Presentaion](https://nonstickfryingpan.github.io/Pharmacoinformatics-Project/)
 
 </div>
 
