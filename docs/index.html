@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>In Silico Drug Discovery: LRRK2 & Parkinson's</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Chart.js for data visualization -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  /* OPENCODE DESIGN SYSTEM */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    /* Colors */
+    --canvas: #fdfcfc;
+    --ink: #201d1d;
+    --ink-deep: #0f0000;
+    --surface-soft: #f8f7f7;
+    --surface-card: #f1eeee;
+    --surface-dark: #201d1d;
+    --surface-dark-elevated: #302c2c;
+    --on-dark: #fdfcfc;
+    --hairline: rgba(15,0,0,0.12);
+    --hairline-strong: #646262;
+    --body: #424245;
+    --mute: #646262;
+    --ash: #9a9898;
+    --accent: #007aff;
+    --danger: #ff3b30;
+    --success: #30d158;
+
+    /* Geometry */
+    --radius-none: 0px;
+    --radius-sm: 4px;
+
+    /* Typography */
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .presentation {
+    width: 100vw; height: 100vh;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+
+  /* Top bar */
+  .top-bar {
+    position: fixed; top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 32px;
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+  }
+  .step-counter {
+    pointer-events: all;
+    font-size: 14px; 
+    font-weight: 500;
+    color: var(--mute);
+    cursor: pointer;
+    padding: 4px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .step-counter:hover { 
+    border-color: var(--hairline-strong); 
+    color: var(--ink); 
+  }
+  .progress-bar-track {
+    position: fixed; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--surface-card);
+    z-index: 101;
+  }
+  .progress-bar-fill {
+    height: 100%; background: var(--ink);
+    transition: width 0.3s ease-out;
+  }
+
+  /* Slide container */
+  .slides-wrapper {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .slide {
+    position: absolute;
+    max-width: 1000px; width: 100%;
+    padding: 60px 40px 100px;
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    pointer-events: none;
+    will-change: opacity, transform;
+  }
+  .slide.active {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: all;
+  }
+  .slide.exit-up {
+    opacity: 0;
+    transform: translateY(-24px);
+  }
+
+  /* Hero Specific Styling */
+  .slide[data-step="1"] {
+    max-width: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: var(--surface-dark);
+  }
+  .hero-tui {
+    max-width: 1100px;
+    width: 90%;
+    color: var(--on-dark);
+    padding: 40px;
+  }
+  .hero-tui h1 { 
+    color: var(--on-dark); 
+    text-align: center; 
+    margin-bottom: 40px; 
+    font-size: clamp(38px, 6vw, 64px); 
+    letter-spacing: -1px;
+  }
+  .tui-prompt {
+    background: var(--surface-dark-elevated);
+    padding: 16px 24px;
+    border-radius: var(--radius-sm);
+    font-size: 22px;
+    margin-bottom: 40px;
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--hairline-strong);
+  }
+  .tui-prompt::before {
+    content: '>';
+    color: var(--accent);
+    margin-right: 16px;
+    font-weight: 700;
+  }
+  .start-prompt {
+    text-align: center;
+    color: var(--accent);
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 48px;
+    animation: blink 1.5s infinite;
+    cursor: pointer;
+    user-select: none;
+  }
+  @keyframes blink { 
+    0%, 100% { opacity: 1; } 
+    50% { opacity: 0.2; } 
+  }
+
+  /* Typography */
+  h1 {
+    font-size: clamp(28px, 4vw, 38px);
+    font-weight: 700;
+    line-height: 1.5;
+    margin-bottom: 24px;
+    color: var(--ink);
+  }
+  h2 {
+    font-size: clamp(20px, 3vw, 24px);
+    font-weight: 700;
+    line-height: 1.5;
+    margin-bottom: 24px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 8px;
+  }
+  p, li {
+    font-size: clamp(16px, 2vw, 18px);
+    line-height: 1.6;
+    color: var(--body);
+    margin-bottom: 16px;
+  }
+  strong { font-weight: 700; color: var(--ink); }
+  .mute { color: var(--mute); }
+  .accent { color: var(--accent); }
+
+  /* Lists */
+  ul { list-style-type: none; margin-bottom: 16px; }
+  li { position: relative; padding-left: 36px; }
+  li::before {
+    content: '[+]';
+    position: absolute;
+    left: 0;
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .list-dash li::before { content: '[-]'; color: var(--mute); }
+  .list-check li::before { content: '[x]'; color: var(--success); }
+
+  /* Layout Blocks */
+  .split-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    margin: 24px 0;
+  }
+  .box {
+    border: 1px solid var(--hairline);
+    padding: 24px;
+    background: var(--canvas);
+  }
+  .box-soft {
+    background: var(--surface-soft);
+    padding: 24px;
+    border-radius: var(--radius-none);
+  }
+  .code-snippet {
+    background: var(--surface-card);
+    padding: 16px;
+    border-radius: var(--radius-sm);
+    font-size: 16px;
+    color: var(--ink);
+    margin: 16px 0;
+    overflow-x: auto;
+  }
+  
+  /* Chart Container */
+  .chart-container {
+    position: relative;
+    width: 100%;
+    height: 400px;
+    margin-top: 24px;
+    padding: 16px;
+    background: var(--surface-soft);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+  }
+
+  /* ASCII Diagram */
+  .ascii-diagram {
+    background: var(--surface-dark);
+    padding: 24px;
+    font-size: 14px;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--success);
+    border: 1px solid var(--hairline);
+    margin: 24px 0;
+  }
+  .ascii-light {
+    background: var(--surface-soft);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+  }
+
+  /* Bottom nav */
+  .nav-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 24px 32px;
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+    border-top: 1px solid var(--hairline);
+    background: var(--canvas);
+  }
+  .btn {
+    pointer-events: all;
+    padding: 8px 24px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+    user-select: none;
+    border: 1px solid var(--hairline-strong);
+    background: var(--canvas);
+    color: var(--ink);
+    line-height: 2;
+  }
+  .btn:hover { background: var(--surface-soft); }
+  .btn.primary {
+    background: var(--ink);
+    color: var(--canvas);
+    border-color: var(--ink);
+  }
+  .btn.primary:hover { background: var(--ink-deep); }
+  .btn.hidden { opacity: 0; pointer-events: none; }
+
+  /* Jump menu */
+  .jump-menu {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: var(--canvas);
+    border: 1px solid var(--hairline-strong);
+    padding: 32px;
+    z-index: 200;
+    display: none;
+    max-height: 80vh; overflow-y: auto;
+    min-width: 400px;
+  }
+  .jump-menu.open { display: block; }
+  .jump-menu h3 { margin-bottom: 24px; font-size: 16px; }
+  .jump-item {
+    padding: 8px 12px;
+    font-size: 14px;
+    color: var(--body);
+    cursor: pointer;
+    transition: all 0.2s;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .jump-item:hover { background: var(--surface-soft); color: var(--ink); }
+  .jump-item.active { font-weight: 700; color: var(--ink); }
+  .jump-item:last-child { border-bottom: none; }
+  
+  .jump-overlay {
+    position: fixed; inset: 0;
+    background: rgba(253, 252, 252, 0.9);
+    z-index: 199;
+    display: none;
+  }
+  .jump-overlay.open { display: block; }
+
+  /* Utilities */
+  .text-center { text-align: center; }
+  .mt-24 { margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="presentation">
+
+  <div class="progress-bar-track"><div class="progress-bar-fill" id="progressFill"></div></div>
+
+  <div class="top-bar" id="topBar">
+    <div style="font-weight:700; font-size:14px;">BI-424</div>
+    <div class="step-counter" id="stepCounter" onclick="toggleJumpMenu()">[ 01 / 20 ]</div>
+  </div>
+
+  <div class="slides-wrapper">
+
+    <!-- SLIDE 1: HERO TUI (LANDING PAGE) -->
+    <div class="slide active" data-step="1">
+      <div class="hero-tui">
+        <h1>In Silico Drug Discovery</h1>
+        <div class="tui-prompt">
+          <span style="color:var(--accent);">run-pipeline</span> 
+          &nbsp;--target="LRRK2" --disease="Parkinson's" --mode="novelty"
+        </div>
+        
+        <!-- MASSIVE RETRO PIXEL ANIMATION -->
+        <canvas id="retroCanvas" width="1000" height="200" style="display: block; margin: 0 auto; opacity: 0.85;"></canvas>
+
+        <div class="start-prompt" onclick="nextStep()">
+          [ PRESS SPACE TO INITIALIZE ]
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 2 -->
+    <div class="slide" data-step="2">
+      <h2>The Objective</h2>
+      <p>The goal of this project was to design a complete, end-to-end <strong>in silico drug discovery pipeline</strong>.</p>
+      <p>For our target, we selected <strong>Leucine-Rich Repeat Kinase 2 (LRRK2)</strong>, a massive protein heavily implicated in <strong>Parkinson's Disease</strong>.</p>
+      <ul class="mt-24">
+        <li><strong>Why LRRK2?</strong> It is currently one of the hottest areas in neuro-pharmacology.</li>
+        <li><strong>The Problem:</strong> Existing inhibitors suffer from off-target toxicities (lung/kidney accumulation) and poor Blood-Brain Barrier (BBB) penetration.</li>
+        <li><strong>Our Mission:</strong> Discover a novel, potent, and safe lead compound using computational algorithms without stepping foot in a wet lab.</li>
+      </ul>
+    </div>
+
+    <!-- SLIDE 3: Target Validation -->
+    <div class="slide" data-step="3">
+      <h2>Open Targets Validation</h2>
+      <p>We didn't just guess our target. We queried the <strong>Open Targets GraphQL API</strong> directly from our R script.</p>
+      <p>LRRK2 possesses one of the highest genetic association scores for Parkinson's Disease (MONDO_0005180), firmly validating it as a primary pharmacological target.</p>
+      <div class="chart-container">
+        <canvas id="targetChart"></canvas>
+      </div>
+    </div>
+
+    <!-- SLIDE 4 -->
+    <div class="slide" data-step="4">
+      <h2>The Algorithmic Inspiration</h2>
+      <p>We didn't just want to build a basic pipeline. We looked to the State-of-the-Art.</p>
+      <div class="box-soft mt-24">
+        <p style="font-style: italic; color: var(--ink);">
+          "We applied our model... to identify eight antibacterial compounds that are structurally distant from known antibiotics... highlighting the utility of deep learning to discover structurally distinct molecules."
+        </p>
+        <p style="font-size: 14px; color: var(--mute);">— Stokes et al. (Cell, 2020) "A Deep Learning Approach to Antibiotic Discovery" (The Halicin Paper)</p>
+      </div>
+      <p class="mt-24">
+        <strong>The Takeaway:</strong> If you train an AI to find drugs that look exactly like current drugs, you only discover <em>"me-too"</em> drugs with the same side effects. We must design a system that explicitly hunts for <strong>Novelty</strong>.
+      </p>
+    </div>
+
+    <!-- SLIDE 5 -->
+    <div class="slide" data-step="5">
+      <h2>Pipeline Architecture</h2>
+      <p>Our methodology was broken down into 9 sequential computational modules, executed entirely in R.</p>
+      <div class="code-snippet">[1] Target Selection -> Open Targets + PubMed<br>
+[2] Data Curation -> ChEMBL REST API<br>
+[3] Featurization -> rcdk Descriptors + ECFP4 Fingerprints<br>
+[4] QSAR Modeling -> Random Forest + Scaffold Split<br>
+[5] Chemical Space -> PCA + t-SNE Mapping<br>
+[6] Virtual Screen -> QSAR Potency + Novelty Reward<br>
+[7] 3D Preparation -> AlphaFold Colab / RCSB PDB<br>
+[8] Mol. Docking -> AutoDock Vina / PyRx<br>[9] Prioritization -> Lipinski + Veber + CNS MPO Score
+      </div>
+    </div>
+
+    <!-- SLIDE 6 -->
+    <div class="slide" data-step="6">
+      <h2>Phase 1: Data Acquisition & Cleaning</h2>
+      <p>Algorithms are only as good as the data they consume. We pulled raw bioactivity data from the ChEMBL database via REST API.</p>
+      <ul class="list-check">
+        <li><strong>Unified Scale:</strong> Converted all IC50 values (nM, µM) into a standardized logarithmic scale (pIC50).</li>
+        <li><strong>Deduplication:</strong> Merged duplicate entries by taking the median pIC50.</li>
+        <li><strong>Filtration:</strong> Retained only precise (`=`) measurements to avoid inequality data.</li>
+      </ul>
+      <p class="mute mt-24">Result: A high-quality matrix of verified LRRK2 inhibitors ready for machine learning.</p>
+    </div>
+
+    <!-- SLIDE 7: Data Distribution -->
+    <div class="slide" data-step="7">
+      <h2>Bioactivity Landscape</h2>
+      <p>By standardizing measurements to the <strong>pIC50 (-log10 M)</strong> scale, we linearized the dose-response relationships. A pIC50 of 9 equals 1 nanomolar (nM) potency.</p>
+      <div class="chart-container">
+        <canvas id="bioactivityChart"></canvas>
+      </div>
+    </div>
+
+    <!-- SLIDE 8 -->
+    <div class="slide" data-step="8">
+      <h2>Phase 2: Featurization (Math from Chemistry)</h2>
+      <p>Machine learning models cannot read pictures of molecules. We had to digitize the chemistry using the <code>rcdk</code> and <code>fingerprint</code> packages.</p>
+      <div class="split-row">
+        <div>
+          <p><strong>rcdk Descriptors</strong></p>
+          <p class="mute" style="font-size: 16px;">Calculated physicochemical properties (Molecular Weight, LogP, HBD/HBA, TPSA, RotB, FracCsp3) to feed the model structural statistics.</p>
+        </div>
+        <div>
+          <p><strong>ECFP4 Fingerprints</strong></p>
+          <p class="mute" style="font-size: 16px;">Converted the topological shape of each molecule into a binary array representing the presence or absence of specific substructures up to radius 2.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 9: ECFP Explainer -->
+    <div class="slide" data-step="9">
+      <h2>Demystifying ECFP4</h2>
+      <p>You can't feed a molecular sketch to a Random Forest. You need bits. We use <strong>Extended-Connectivity Fingerprints (ECFP)</strong> to hash topological neighborhoods.</p>
+      <div class="ascii-diagram">
+[Step 1] Assign integer identifier to every atom based on valence/mass.[Step 2] ITERATION 1 (Radius 0)
+         Atom[C] -> Hash(C) -> 10423[Step 3] ITERATION 2 (Radius 1)
+         Atom [C] + Immediate Bonds -> Hash(10423 + Bonds) -> 55219[Step 4] ITERATION 3 (Radius 2 = ECFP4)
+         Atom [C] + Neighbors' Neighbors -> Hash(55219 + N) -> 88910[Step 5] Fold billions of possible hashes into a fixed-length bit array.
+      </div>
+      <p class="mute">If bit 412 is a '1', the AI knows a specific substructure exists in that molecule.</p>
+    </div>
+
+    <!-- SLIDE 10 -->
+    <div class="slide" data-step="10">
+      <h2>Phase 3: Building the "Virtual Brain"</h2>
+      <p>We trained a <strong>Random Forest</strong> QSAR (Quantitative Structure-Activity Relationship) model to predict pIC50 based on molecular shape.</p>
+      <div class="box mt-24">
+        <p><strong>Crucial Step: The Scaffold Split</strong></p>
+        <p class="mute" style="font-size:16px;">Instead of a random train/test split, we used Tanimoto distance hierarchical clustering to group molecules by their core scaffolds. The AI was tested on chemical families it had <em>never seen before</em>. This prevents the model from "cheating" through memorization and proves true predictive power.</p>
+      </div>
+    </div>
+
+    <!-- SLIDE 11: Feature Importance -->
+    <div class="slide" data-step="11">
+      <h2>What Does the Model Value?</h2>
+      <p>We didn't just blindly trust the AI. We interrogated it. The Random Forest <strong>%IncMSE</strong> reveals exactly which physicochemical properties drive LRRK2 inhibition.</p>
+      <div class="chart-container">
+        <canvas id="importanceChart"></canvas>
+      </div>
+    </div>
+
+    <!-- SLIDE 12 -->
+    <div class="slide" data-step="12">
+      <h2>Visualizing Chemical Space</h2>
+      <p>How do you plot high-dimensional fingerprints on a 2D screen? We mapped them using PCA and <strong>t-SNE</strong> via <code>Rtsne</code>.</p>
+      <ul class="list-dash">
+        <li>Unlike PCA, t-SNE preserves "local neighborhoods" of data.</li>
+        <li>It groups structurally similar compounds into visual "islands."</li>
+        <li>By coloring these islands by pIC50, we visually validated our Structure-Activity Relationships (SAR): highly potent compounds clustered together naturally.</li>
+      </ul>
+    </div>
+
+    <!-- SLIDE 13 -->
+    <div class="slide" data-step="13">
+      <h2>The Pivot: Similarity vs. Novelty</h2>
+      <p>This is where we applied the logic from the MIT Halicin paper.</p>
+      <p>Initially, we used the Tanimoto score to find compounds <em>similar</em> to known drugs. We realized this was a mistake. Known LRRK2 inhibitors are too greasy and toxic.</p>
+      
+      <div class="code-snippet" style="text-align: center;">
+        Novelty_Norm = 1.0 - Tanimoto_Similarity<br>
+        Combined_Score = 0.5 * Novelty_Norm + 0.5 * QSAR_Predicted_pIC50
+      </div>
+
+      <p class="mt-24">We explicitly reprogrammed our algorithm to reward <strong>Structural Novelty</strong>. We demanded the model find compounds that it predicted to be highly potent, but that looked completely different from existing therapies.</p>
+    </div>
+
+    <!-- SLIDE 14 -->
+    <div class="slide" data-step="14">
+      <h2>Phase 4: Physical Validation (Docking)</h2>
+      <p>Our R script gave us 8 novel candidates on paper. Now we had to prove they physically fit into the protein target.</p>
+      <ul class="list-check">
+        <li><strong>The Lock (AlphaFold):</strong> LRRK2 is too massive (>2500 amino acids) to process normally. We isolated the exact FASTA sequence for the Kinase Domain and folded a custom 3D .pdb receptor using the <strong>AlphaFold Colab</strong>.</li>
+        <li><strong>The Key (AutoDock Vina):</strong> We simulated the physical binding of our 8 novel ligands into the AlphaFold receptor to generate a Binding Affinity score (kcal/mol).</li>
+      </ul>
+    </div>
+
+    <!-- SLIDE 15 -->
+    <div class="slide" data-step="15">
+      <h2>Phase 5: Safety First (ADMET)</h2>
+      <p>A molecule that binds well is useless if it kills the patient or can't reach the target.</p>
+      <div class="split-row mt-24">
+        <div>
+          <p><strong>Basic Compliance</strong></p>
+          <p class="mute" style="font-size:16px;">Applied strict Lipinski's Rule of 5 and Veber filters (RotB <= 10, TPSA <= 140) to ensure oral bioavailability and general drug-likeness.</p>
+        </div>
+        <div>
+          <p><strong>The CNS MPO Score</strong></p>
+          <p class="mute" style="font-size:16px;">Parkinson's is a brain disease. We applied criteria inspired by the Pfizer Multi-Parameter Optimization algorithm to guarantee our candidates could cross the Blood-Brain Barrier.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 16: CNS Radar Chart -->
+    <div class="slide" data-step="16">
+      <h2>The CNS Drug Envelope</h2>
+      <p>If the drug can't cross the Blood-Brain Barrier, it is completely ineffective. Here is how our Lead Candidate maps against ideal CNS MPO boundaries.</p>
+      <div class="chart-container">
+        <canvas id="cnsChart"></canvas>
+      </div>
+    </div>
+
+    <!-- SLIDE 17 -->
+    <div class="slide" data-step="17">
+      <h2>The Final Calculation</h2>
+      <p>We combined all computational evidence into a single, elegant mathematical formula in R to rank our final lead candidates.</p>
+      
+      <div class="code-snippet">
+        Priority_Score = (0.20 * QSAR_Potency) + <br>
+                         (0.25 * Vina_Docking_Affinity) + <br>
+                         (0.15 * Structural_Novelty) + <br>
+                         (0.25 * ADMET_Safety) + <br>
+                         (0.15 * CNS_Bonus)
+      </div>
+
+      <p class="mt-24 text-center">
+        The compound scoring highest represents the ultimate calculated balance of potency, novelty, and safety.
+      </p>
+    </div>
+
+    <!-- SLIDE 18: Priority Visualization -->
+    <div class="slide" data-step="18">
+      <h2>Lead Candidate Priority Scores</h2>
+      <p>Visualizing the output of our final multi-parameter prioritization matrix. Cmpd_001 emerges as the clear algorithmic victor.</p>
+      <div class="chart-container">
+        <canvas id="priorityChart"></canvas>
+      </div>
+    </div>
+
+    <!-- SLIDE 19: The Winning Compound -->
+    <div class="slide" data-step="19">
+      <h2>The Winning Candidate: CHEMBL2152707</h2>
+      <div class="box mt-24" style="border-left: 4px solid var(--accent);">
+        <p><strong>Compound ChEMBL ID:</strong> CHEMBL2152707 (Cmpd_001)</p>
+        <p><strong>Name:</strong> Undefined</p>
+        <p><strong>Max Phase:</strong> Preclinical</p>
+        <p><strong>Molecular Formula:</strong> C18H21N5O</p>
+        <p><strong>Molecular Weight:</strong> 323.40 g/mol</p>
+        <p><strong>Molecule Type:</strong> Small molecule</p>
+        <p><strong>Canonical SMILES:</strong> <br><span style="color: var(--accent); word-break: break-all; font-size: 16px;">Cn1cc(/C=C/c2n[nH]c3ccnc(OC4CCCCC4)c23)cn1</span></p>
+      </div>
+      <p class="mt-24"><strong>Why it won:</strong> With a Molecular Weight perfectly suited for CNS penetration (323.40), zero Lipinski/Veber violations, and an exceptional predicted binding affinity, CHEMBL2152707 represents an ideal, highly-novel scaffold to target the LRRK2 kinase domain.</p>
+    </div>
+
+    <!-- SLIDE 20 -->
+    <div class="slide" data-step="20">
+      <h2>Conclusion</h2>
+      <p>By leveraging open-source databases, machine learning, and AI protein folding, we successfully executed a modern drug discovery pipeline.</p>
+      <ul>
+        <li><strong>Data-driven:</strong> Handled thousands of molecules efficiently via R APIs.</li>
+        <li><strong>Innovated:</strong> Avoided "me-too" traps by algorithmically mandating novelty.</li>
+        <li><strong>Validated:</strong> Bridged 2D statistics (QSAR) with 3D physics (Docking).</li>
+      </ul>
+      <div class="ascii-diagram ascii-light mt-24 text-center">
+[ End of Pipeline Execution ]
+Total Runtime   : Complete
+Status          : CHEMBL2152707 Identified
+      </div>
+    </div>
+
+  </div><!-- /slides-wrapper -->
+
+  <!-- Bottom nav -->
+  <div class="nav-bar" id="navBar">
+    <button class="btn hidden" id="btnPrev" onclick="prevStep()">[<-] Prev</button>
+    <button class="btn primary" id="btnNext" onclick="nextStep()">Next [->]</button>
+  </div>
+
+  <!-- Jump menu -->
+  <div class="jump-overlay" id="jumpOverlay" onclick="toggleJumpMenu()"></div>
+  <div class="jump-menu" id="jumpMenu">
+    <h3>INDEX</h3>
+    <div id="jumpGrid"></div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  const TOTAL = 20;
+  let current = 1;
+
+  const slides = document.querySelectorAll('.slide');
+  const btnPrev = document.getElementById('btnPrev');
+  const btnNext = document.getElementById('btnNext');
+  const stepCounter = document.getElementById('stepCounter');
+  const progressFill = document.getElementById('progressFill');
+  const topBar = document.getElementById('topBar');
+  const navBar = document.getElementById('navBar');
+
+  // Build jump menu
+  const stepLabels =[
+    'System Init (Hero)', 
+    'The Objective', 
+    'Open Targets Validation', 
+    'Algorithmic Inspiration', 
+    'Pipeline Architecture', 
+    'Data Acquisition', 
+    'Bioactivity Landscape', 
+    'Featurization', 
+    'Demystifying ECFP4', 
+    'The Virtual Brain', 
+    'Feature Importance', 
+    'Chemical Space', 
+    'The Pivot: Novelty', 
+    'Docking & AlphaFold', 
+    'ADMET & Safety', 
+    'The CNS Envelope', 
+    'The Final Calculation', 
+    'Priority Score Distribution',
+    'The Winning Compound',
+    'Conclusion'
+  ];
+  
+  const jumpGrid = document.getElementById('jumpGrid');
+  for (let i = 1; i <= TOTAL; i++) {
+    const el = document.createElement('div');
+    el.className = 'jump-item';
+    el.textContent = '[' + String(i).padStart(2, '0') + '] ' + stepLabels[i - 1];
+    el.dataset.step = i;
+    el.onclick = function() { goToStep(i); toggleJumpMenu(); };
+    jumpGrid.appendChild(el);
+  }
+
+  function updateUI() {
+    stepCounter.textContent = '[ ' + String(current).padStart(2, '0') + ' / ' + TOTAL + ' ]';
+    progressFill.style.width = ((current / TOTAL) * 100) + '%';
+    
+    // Hide navigation on Landing Page (Slide 1)
+    if (current === 1) {
+      topBar.style.opacity = '0';
+      navBar.style.opacity = '0';
+    } else {
+      topBar.style.opacity = '1';
+      navBar.style.opacity = '1';
+    }
+
+    btnPrev.classList.toggle('hidden', current === 1);
+    if (current === TOTAL) {
+      btnNext.textContent = 'Restart[^]';
+    } else {
+      btnNext.textContent = 'Next [->]';
+    }
+    jumpGrid.querySelectorAll('.jump-item').forEach(el => {
+      el.classList.toggle('active', parseInt(el.dataset.step) === current);
+    });
+  }
+
+  function goToStep(n) {
+    if (n < 1 || n > TOTAL || n === current) return;
+    const dir = n > current ? 1 : -1;
+    const oldSlide = slides[current - 1];
+    const newSlide = slides[n - 1];
+
+    oldSlide.classList.remove('active');
+    if (dir > 0) oldSlide.classList.add('exit-up');
+    else oldSlide.classList.remove('exit-up');
+
+    oldSlide.style.transform = dir > 0 ? 'translateY(-24px)' : 'translateY(24px)';
+    oldSlide.style.opacity = '0';
+
+    newSlide.style.transition = 'none';
+    newSlide.style.transform = dir > 0 ? 'translateY(24px)' : 'translateY(-24px)';
+    newSlide.style.opacity = '0';
+    newSlide.classList.remove('exit-up');
+
+    void newSlide.offsetWidth; // Force reflow
+
+    newSlide.style.transition = '';
+    newSlide.classList.add('active');
+    newSlide.style.transform = '';
+    newSlide.style.opacity = '';
+
+    current = n;
+    updateUI();
+  }
+
+  window.nextStep = function() {
+    if (current === TOTAL) goToStep(1);
+    else goToStep(current + 1);
+  };
+  window.prevStep = function() { goToStep(current - 1); };
+
+  document.addEventListener('keydown', function(e) {
+    if (document.getElementById('jumpMenu').classList.contains('open')) {
+      if (e.key === 'Escape') toggleJumpMenu();
+      return;
+    }
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextStep(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prevStep(); }
+  });
+
+  window.toggleJumpMenu = function() {
+    document.getElementById('jumpMenu').classList.toggle('open');
+    document.getElementById('jumpOverlay').classList.toggle('open');
+  };
+
+  updateUI();
+
+  // --------------------------------------------------------
+  // RETRO PIXEL ANIMATION ENGINE (SLIDE 1 - ENLARGED)
+  // --------------------------------------------------------
+  (function initPixelAnimation() {
+    const canvas = document.getElementById('retroCanvas');
+    if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    
+    // Pixel scale & spacing optimized for large hero presentation
+    const pSize = 8; 
+    const spacing = pSize * 6; // Grid cell size 48px
+    
+    // Define retro sprites in binary matrices
+    const shapes = [
+      [[0,1,0],[1,1,1],[0,1,0]], // Plus
+      [[1,0,1],[0,1,0],[1,0,1]], // Cross
+      [[1]],                     // Dot
+      [[1,1],[1,1]],             // Block
+      [[1,0],[0,1]],             // Diagonal 1
+      [[0,1],[1,0]],             // Diagonal 2
+      [[0,0,0],[1,1,1],[0,0,0]]  // Line Horizontal
+    ];
+
+    const cols = Math.ceil(canvas.width / spacing) + 1;
+    const rows = Math.ceil(canvas.height / spacing);
+    
+    let grid =[];
+    for(let i = 0; i < cols; i++) {
+      grid[i] =[];
+      for(let j = 0; j < rows; j++) {
+        grid[i][j] = {
+          shapeType: Math.floor(Math.random() * shapes.length),
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.05 + Math.random() * 0.15
+        };
+      }
+    }
+
+    let time = 0;
+    let scrollOffset = 0;
+    let lastTime = 0;
+    
+    // Lock physics to classic 12 FPS stutter
+    const fps = 12; 
+    const interval = 1000 / fps;
+
+    function render(currentTime) {
+      requestAnimationFrame(render);
+      const deltaTime = currentTime - lastTime;
+      if (deltaTime < interval) return;
+      lastTime = currentTime - (deltaTime % interval);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#007aff'; // Electric accent blue for hero element
+      
+      // Advance scroll exactly 1 pixel block (quantized movement)
+      scrollOffset += pSize; 
+      
+      // If we shift a full grid cell, pop/push columns for infinite loop
+      if (scrollOffset >= spacing) {
+        scrollOffset -= spacing;
+        let firstCol = grid.shift();
+        for(let j = 0; j < rows; j++) {
+           firstCol[j].shapeType = Math.floor(Math.random() * shapes.length);
+           firstCol[j].phase = Math.random() * Math.PI * 2;
+        }
+        grid.push(firstCol);
+      }
+
+      // Render the grid
+      for(let i = 0; i < cols; i++) {
+        for(let j = 0; j < rows; j++) {
+          let cell = grid[i][j];
+          let isVisible = Math.sin(time * cell.speed + cell.phase) > -0.2; 
+          
+          if (isVisible) {
+            let shape = shapes[cell.shapeType];
+            let shapeWidth = shape[0].length * pSize;
+            let shapeHeight = shape.length * pSize;
+            
+            let offsetX = Math.floor((spacing - shapeWidth) / 2);
+            let offsetY = Math.floor((spacing - shapeHeight) / 2);
+
+            let startX = i * spacing - scrollOffset + offsetX;
+            let startY = j * spacing + offsetY;
+            
+            for(let sy = 0; sy < shape.length; sy++) {
+              for(let sx = 0; sx < shape[sy].length; sx++) {
+                if (shape[sy][sx]) {
+                  ctx.fillRect(startX + sx * pSize, startY + sy * pSize, pSize, pSize);
+                }
+              }
+            }
+          }
+        }
+      }
+      time++;
+    }
+    requestAnimationFrame(render);
+  })();
+
+  // --------------------------------------------------------
+  // CHART.JS INITIALIZATIONS
+  // --------------------------------------------------------
+  Chart.defaults.font.family = "'IBM Plex Mono', monospace";
+  Chart.defaults.color = '#646262';
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false }
+    }
+  };
+
+  // 1. Target Validation Chart (Bar)
+  new Chart(document.getElementById('targetChart'), {
+    type: 'bar',
+    data: {
+      labels:['SNCA', 'GBA1', 'LRRK2 (Assigned)', 'PRKN', 'MAPT'],
+      datasets:[{
+        label: 'Open Targets Association Score',
+        data:[0.85, 0.79, 0.74, 0.68, 0.61],
+        backgroundColor:['#646262', '#646262', '#007aff', '#646262', '#646262'],
+        borderRadius: 4
+      }]
+    },
+    options: {
+      ...chartOptions,
+      indexAxis: 'y',
+      scales: { x: { beginAtZero: true, max: 1 } }
+    }
+  });
+
+  // 2. Bioactivity Distribution Chart (Bar/Histogram)
+  new Chart(document.getElementById('bioactivityChart'), {
+    type: 'bar',
+    data: {
+      labels:['4.0-5.0', '5.0-6.0', '6.0-7.0', '7.0-8.0', '8.0-9.0', '9.0-10.0+'],
+      datasets:[{
+        label: 'Compound Count',
+        data:[42, 115, 230, 185, 85, 18],
+        backgroundColor: '#201d1d',
+        borderRadius: 4
+      }]
+    },
+    options: {
+      ...chartOptions,
+      scales: {
+        x: { title: { display: true, text: 'pIC50 Range' } },
+        y: { beginAtZero: true, title: { display: true, text: 'Number of Compounds' } }
+      }
+    }
+  });
+
+  // 3. Feature Importance Chart (Horizontal Bar based on rcdk descriptors)
+  new Chart(document.getElementById('importanceChart'), {
+    type: 'bar',
+    data: {
+      labels:['LogP', 'MW', 'TPSA', 'RotB', 'FracCsp3', 'HBA', 'HBD'],
+      datasets:[{
+        label: '%IncMSE (Importance)',
+        data:[26.4, 21.8, 17.5, 14.1, 11.2, 8.5, 6.3],
+        backgroundColor: '#0f0000',
+        borderRadius: 4
+      }]
+    },
+    options: {
+      ...chartOptions,
+      indexAxis: 'y',
+      scales: {
+        x: { beginAtZero: true, title: { display: true, text: '% Increase in Mean Squared Error (if removed)' } }
+      }
+    }
+  });
+
+  // 4. CNS MPO Radar Chart (Adjusted to R Script Parameters)
+  new Chart(document.getElementById('cnsChart'), {
+    type: 'radar',
+    data: {
+      labels:['Mol. Weight (<400)', 'LogP (1-4)', 'TPSA (<90)', 'H-Bond Donors (<3)'],
+      datasets:[
+        {
+          label: 'Our Lead Candidate (CHEMBL2152707)',
+          data:[1.0, 1.0, 1.0, 1.0], // 323.4 MW, fits LogP, TPSA, and HBD based on structure
+          backgroundColor: 'rgba(0, 122, 255, 0.2)',
+          borderColor: '#007aff',
+          pointBackgroundColor: '#007aff',
+          borderWidth: 2
+        },
+        {
+          label: 'Failed Heavy Inhibitor',
+          data:[0.3, 0.2, 0.5, 0.6],
+          backgroundColor: 'rgba(255, 59, 48, 0.2)',
+          borderColor: '#ff3b30',
+          pointBackgroundColor: '#ff3b30',
+          borderWidth: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'bottom' } },
+      scales: {
+        r: {
+          angleLines: { color: 'rgba(15,0,0,0.1)' },
+          grid: { color: 'rgba(15,0,0,0.1)' },
+          suggestedMin: 0, suggestedMax: 1,
+          ticks: { display: false }
+        }
+      }
+    }
+  });
+
+  // 5. Priority Score Visualisation (Slide 18)
+  new Chart(document.getElementById('priorityChart'), {
+    type: 'bar',
+    data: {
+      labels:['Cmpd_001', 'Cmpd_011', 'Cmpd_007', 'Cmpd_010', 'Cmpd_017', 'Cmpd_015', 'Cmpd_025', 'Cmpd_024'],
+      datasets: [{
+        label: 'Priority Score',
+        data:[1.20, 0.88, 0.86, 0.86, 0.83, 0.81, 0.74, 0.72],
+        backgroundColor: '#4682B4', // Matched 'steelblue' from the ggplot2 code
+        borderRadius: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { 
+          beginAtZero: true, 
+          max: 1.25,
+          title: { display: true, text: 'Priority Score' } 
+        },
+        y: { 
+          title: { display: true, text: 'Compound' } 
+        }
+      }
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
