@@ -14,7 +14,7 @@
 ---
 
 ## Overview
-Computational pipeline predicting LRRK2 kinase domain inhibitors using QSAR modeling, structural novelty scoring, and molecular docking. Data is LRRK2 bioactivity measurements sourced from the[ChEMBL Database](https://www.ebi.ac.uk/chembl/).
+Computational pipeline predicting LRRK2 kinase domain inhibitors using QSAR modeling, structural novelty scoring, and molecular docking. Data is LRRK2 bioactivity measurements sourced from the [ChEMBL Database](https://www.ebi.ac.uk/chembl/).
 
 ## Setup
 Install dependencies and configure the environment.
